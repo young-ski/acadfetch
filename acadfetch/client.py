@@ -52,12 +52,17 @@ class Client:
         timeout: float = consts.DEFAULT_TIMEOUT,
         user_agent: str = consts.USER_AGENT,
         headers: Mapping[str, str] | None = None,
+        auth: Mapping[str, Mapping[str, str]] | None = None,
     ) -> None:
         self.bucket = TokenBucket(rate)
         self.retries = max(0, retries)
         self.timeout = timeout
         self.user_agent = user_agent
         self.headers = dict(headers or {})
+        # Per-source credentials. The registry sets ``source`` before dispatch
+        # so a Zenodo token is never sent to figshare.
+        self.auth = {k: dict(v) for k, v in (auth or {}).items()}
+        self.source: str | None = None
 
     # -- internals ---------------------------------------------------------
     def _sleep(self, attempt: int, retry_after: float | None) -> None:
@@ -70,7 +75,12 @@ class Client:
     def _request(
         self, url: str, headers: Mapping[str, str] | None = None
     ) -> urllib.request.Request:
-        merged = {**self.headers, "User-Agent": self.user_agent, "Accept-Encoding": "identity"}
+        merged: dict[str, str] = {}
+        if self.source and self.source in self.auth:
+            merged.update(self.auth[self.source])
+        merged["User-Agent"] = self.user_agent
+        merged["Accept-Encoding"] = "identity"
+        merged.update(self.headers)  # explicit --header wins over a token
         if headers:
             merged.update(headers)
         return urllib.request.Request(url, headers=merged)

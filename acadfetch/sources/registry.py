@@ -21,6 +21,16 @@ def names() -> list[str]:
     return ["zenodo", "figshare", "arxiv", "doi", "direct"]
 
 
+def _name_of(adapter) -> str:  # noqa: ANN001
+    return adapter.__name__.rsplit(".", 1)[-1]
+
+
+def _dispatch(adapter, client: Client, text: str) -> Record:  # noqa: ANN001
+    """Route through ``adapter`` with the client tagged for its credentials."""
+    client.source = _name_of(adapter)
+    return adapter.resolve(client, text)
+
+
 def resolve(client: Client, target: str, allow_doi: bool = True) -> Record:
     text = " ".join((target or "").split())
     if not text:
@@ -31,17 +41,18 @@ def resolve(client: Client, target: str, allow_doi: bool = True) -> Record:
         text = hit.group(1)
 
     if allow_doi and doi.match(text):
+        client.source = "doi"
         record = doi.resolve(client, text)
         record.target = text  # keep what the user typed in the manifest
         return record
 
     for adapter in ADAPTERS:
         if adapter.match(text):
-            return adapter.resolve(client, text)
+            return _dispatch(adapter, client, text)
 
     # A bare integer is a Zenodo record id far more often than anything else.
     if text.isdigit():
-        return zenodo.resolve(client, f"zenodo:{text}")
+        return _dispatch(zenodo, client, f"zenodo:{text}")
 
     raise TargetError(
         f"cannot tell what {text!r} is; try a DOI, a zenodo/figshare/arxiv id, or a URL.\n"

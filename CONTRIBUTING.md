@@ -30,6 +30,12 @@ transfer loop.
 `scripts/probe_resume.py <record-id>` interrupts a real download and resumes it.
 It needs network; run it when you change `downloader.py`.
 
+`scripts/slow_server.py` serves 16 MiB at 1 MiB/s with `Range` support, so speed,
+ETA and resume rendering can be watched without depending on the network.
+
+Progress must never be able to fail a download: it catches stream errors on its
+own and every hook is a no-op when disabled. Keep it that way.
+
 ## Adding an adapter
 
 See the issue template for the questions a PR must answer. Keep `match()` narrow:

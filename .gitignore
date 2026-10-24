@@ -10,3 +10,4 @@ dist/
 out/
 *.part
 *.part.meta.json
+.tmp/

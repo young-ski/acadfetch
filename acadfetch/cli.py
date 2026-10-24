@@ -9,13 +9,13 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-import time
 from pathlib import Path
 
-from . import consts, manifest, naming
+from . import auth, consts, manifest, naming
 from .client import Client
 from .downloader import Options, fetch_record, human
 from .errors import AcFError, PartialError, TargetError
+from .progress import Progress
 from .sources import registry
 
 EXIT_OK, EXIT_FAIL, EXIT_PARTIAL, EXIT_INTERRUPT = 0, 1, 2, 130
@@ -42,26 +42,6 @@ def parse_size(text: str) -> int:
     return int(value * scale)
 
 
-class Printer:
-    def __init__(self, quiet: bool = False) -> None:
-        self.quiet = quiet
-        self._last: dict[str, float] = {}
-
-    def __call__(self, line: str) -> None:
-        if self.quiet:
-            return
-        key = line.split(":")[0]
-        now = time.monotonic()
-        if now - self._last.get(key, 0.0) < 0.4:
-            return
-        self._last[key] = now
-        print(line, flush=True)
-
-    def info(self, line: str = "") -> None:
-        if not self.quiet:
-            print(line, flush=True)
-
-
 def cmd_sources(_: argparse.Namespace) -> int:
     for name in registry.names():
         print(name)
@@ -69,7 +49,14 @@ def cmd_sources(_: argparse.Namespace) -> int:
 
 
 def _client(args: argparse.Namespace) -> Client:
-    return Client(rate=args.rate, retries=args.retries, headers=_headers(args.header))
+    tokens = {} if getattr(args, "no_token", False) else auth.load()
+    args.tokens = tokens
+    return Client(
+        rate=args.rate,
+        retries=args.retries,
+        headers=_headers(args.header),
+        auth={source: token.headers for source, token in tokens.items()},
+    )
 
 
 def _headers(raw: list[str] | None) -> dict[str, str]:
@@ -87,14 +74,20 @@ def _resolve(args: argparse.Namespace, client: Client):
     return record
 
 
+def _token_for(args: argparse.Namespace, record):  # noqa: ANN001, ANN202
+    return getattr(args, "tokens", {}).get(record.source)
+
+
 def cmd_manifest(args: argparse.Namespace) -> int:
     client = _client(args)
     record = _resolve(args, client)
-    data = manifest.build(record, [])
+    data = manifest.build(record, [], _token_for(args, record))
     out = Path(args.out or "manifest.json")
     manifest.write(out, data)
     print(f"{len(record.files)} file(s) -> {out}")
     _print_header(record)
+    if token := _token_for(args, record):
+        print(f"auth    : token from {token}")
     return EXIT_OK
 
 
@@ -113,14 +106,18 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     client = _client(args)
     record = _resolve(args, client)
     _print_header(record)
+    token = _token_for(args, record)
+    if token:
+        print(f"auth    : token from {token}")
 
     out_dir = Path(args.out or f"acadfetch-out/{record.source}-{_slug(record)}")
+    progress = Progress(enabled=not args.quiet)
     opts = Options(
         out=out_dir,
         concurrency=args.concurrency,
         dry_run=args.dry_run,
         max_bytes=args.max_size,
-        on_progress=Printer(args.quiet),
+        progress=progress,
     )
 
     if args.dry_run:
@@ -133,6 +130,11 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     except PartialError:
         print(f"no file matched --only {args.only}", file=sys.stderr)
         return EXIT_FAIL
+    except KeyboardInterrupt:
+        progress.finish()
+        raise
+    finally:
+        progress.finish()
 
     failures = [r for r in results if not r.ok]
     for row in results:
@@ -146,10 +148,10 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         if row.error:
             print(f"     {row.error}")
 
-    manifest.write(out_dir / "manifest.json", manifest.build(record, results))
+    manifest.write(out_dir / "manifest.json", manifest.build(record, results, token))
     print(f"\n{len(results) - len(failures)}/{len(results)} file(s) in {out_dir}")
     if args.manifest_out:
-        manifest.write(Path(args.manifest_out), manifest.build(record, results))
+        manifest.write(Path(args.manifest_out), manifest.build(record, results, token))
 
     if failures and len(failures) == len(results):
         return EXIT_FAIL
@@ -200,6 +202,11 @@ def build_parser() -> argparse.ArgumentParser:
             action="append",
             metavar="NAME:VALUE",
             help="extra request header, repeatable (e.g. 'Authorization: Bearer <token>')",
+        )
+        p.add_argument(
+            "--no-token",
+            action="store_true",
+            help="ignore $ZENODO_TOKEN / $FIGSHARE_TOKEN",
         )
 
     fetch = sub.add_parser("fetch", help="download every file of a record")

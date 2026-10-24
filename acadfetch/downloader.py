@@ -17,7 +17,6 @@ import json
 import os
 import threading
 import time
-from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,7 +25,9 @@ from . import naming, verify
 from .client import Client
 from .consts import CHUNK
 from .errors import HttpError, PartialError
+from .progress import Progress
 from .sources.base import File, Record, Result
+from .units import human
 
 TRANSFER_ATTEMPTS = 3
 META_SUFFIX = ".part.meta.json"
@@ -39,19 +40,8 @@ class Options:
     retries: int = TRANSFER_ATTEMPTS
     dry_run: bool = False
     max_bytes: int | None = None
-    on_progress: Callable[[str], None] | None = None
+    progress: Progress | None = None
     verify_only: bool = False
-
-
-def human(n: float | None) -> str:
-    if n is None:
-        return "?"
-    value = float(n)
-    for unit in ("B", "KiB", "MiB", "GiB"):
-        if value < 1024 or unit == "GiB":
-            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
-        value /= 1024
-    return f"{value:.1f} GiB"
 
 
 def _read_meta(path: Path) -> dict:
@@ -124,10 +114,10 @@ def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Opt
                     break
                 fh.write(chunk)
                 written += len(chunk)
+                if opts.progress:
+                    opts.progress.advance(len(chunk))
                 if opts.max_bytes and offset + written > opts.max_bytes:
                     raise HttpError(0, file.url, f"exceeds --max-size ({human(opts.max_bytes)})")
-                if opts.on_progress:
-                    opts.on_progress(f"  {file.name}: {human(offset + written)}")
         if declared is not None and int(declared) != written:
             raise HttpError(0, file.url, f"short read: got {written}, expected {declared}")
     if resumed:
@@ -157,6 +147,26 @@ def fetch_file(client: Client, file: File, opts: Options, taken: set[str]) -> Re
         return Result(file=file, state="skipped", path=str(final), verified=None)
 
     resumed_from = part.stat().st_size if part.exists() else 0
+    progress = opts.progress
+    if progress:
+        progress.start(name, file.size)
+    try:
+        return _attempt(client, file, part, meta_path, final, opts, resumed_from)
+    finally:
+        if progress:
+            progress.stop(name)
+
+
+def _attempt(
+    client: Client,
+    file: File,
+    part: Path,
+    meta_path: Path,
+    final: Path,
+    opts: Options,
+    resumed_from: int,
+) -> Result:
+    """Retry loop, verification and final rename for one file."""
     last: Exception | None = None
     for attempt in range(opts.retries + 1):
         try:

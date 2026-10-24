@@ -184,3 +184,52 @@ def test_duplicate_names_do_not_clobber(server, tmp_path):
     )
     assert sorted(p.name for p in tmp_path.iterdir()) == ["a (2).bin", "a.bin"]
     assert [r.state for r in results] == ["downloaded", "downloaded"]
+
+
+class Recorder:
+    def __init__(self):
+        self.calls = []
+
+    def start(self, name, size):
+        self.calls.append(("start", name, size))
+
+    def stop(self, name):
+        self.calls.append(("stop", name))
+
+    def advance(self, n):
+        self.calls.append(("advance", n))
+
+
+def test_progress_hooks_bracket_the_transfer(server, tmp_path):
+    payload = b"p" * 200_000
+    f = make_file(server, payload=payload)
+    rec = Recorder()
+    o = opts(tmp_path)
+    o.progress = rec
+    res = downloader.fetch_file(Client(rate=100, retries=1), f, o, set())
+    assert res.state == "downloaded"
+    kinds = [c[0] for c in rec.calls]
+    assert kinds[0] == "start" and kinds[-1] == "stop"
+    assert sum(c[1] for c in rec.calls if c[0] == "advance") == len(payload)
+    assert rec.calls[0][2] == len(payload)
+
+
+def test_progress_stops_even_when_transfer_fails(server, tmp_path):
+    f = make_file(server, payload=b"z" * 5000, checksum="sha256:" + "0" * 64)
+    rec = Recorder()
+    o = opts(tmp_path)
+    o.progress = rec
+    res = downloader.fetch_file(Client(rate=100, retries=1), f, o, set())
+    assert res.state == "failed"
+    assert rec.calls[-1] == ("stop", "a.bin")
+
+
+def test_skipped_file_never_starts_progress(server, tmp_path):
+    payload = b"x" * 10
+    f = make_file(server, payload=payload, checksum="sha256:" + hashlib.sha256(payload).hexdigest())
+    (tmp_path / "a.bin").write_bytes(payload)
+    rec = Recorder()
+    o = opts(tmp_path)
+    o.progress = rec
+    downloader.fetch_file(Client(rate=100, retries=1), f, o, set())
+    assert rec.calls == []

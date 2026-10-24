@@ -52,3 +52,43 @@ def test_header_without_colon_exits_1(capsys):
 def test_client_carries_headers():
     args = cli.build_parser().parse_args(["fetch", "zenodo:1", "--header", "X: y"])
     assert cli._client(args).headers == {"X": "y"}
+
+
+def _stub_resolve(monkeypatch, source="zenodo"):
+    from acadfetch.sources import registry
+    from acadfetch.sources.base import File, Record
+
+    def fake(client, target, allow_doi=True):
+        client.source = source
+        return Record(source=source, target=target, files=[File("https://x/f", "f")], doi="10.1/x")
+
+    monkeypatch.setattr(registry, "resolve", fake)
+
+
+def test_env_token_is_reported_redacted(monkeypatch, capsys, tmp_path):
+    _stub_resolve(monkeypatch)
+    monkeypatch.setenv("ZENODO_TOKEN", "tok-abcd-9999")
+    code = cli.main(["manifest", "zenodo:1", "-o", str(tmp_path / "m.json")])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "token from $ZENODO_TOKEN (…9999)" in out
+    assert "tok-abcd-9999" not in out
+    assert '"hint": "…9999"' in (tmp_path / "m.json").read_text("utf-8")
+
+
+def test_no_token_skips_env_token(monkeypatch, capsys, tmp_path):
+    _stub_resolve(monkeypatch)
+    monkeypatch.setenv("ZENODO_TOKEN", "tok-abcd-9999")
+    assert cli.main(["manifest", "zenodo:1", "-o", str(tmp_path / "m.json"), "--no-token"]) == 0
+    assert "token from" not in capsys.readouterr().out
+
+
+def test_token_only_loaded_for_its_own_source(monkeypatch):
+    _stub_resolve(monkeypatch, source="arxiv")
+    monkeypatch.setenv("ZENODO_TOKEN", "tok-abcd-9999")
+    args = cli.build_parser().parse_args(["manifest", "arxiv:2401.1"])
+    client = cli._client(args)
+    client.source = "arxiv"
+    assert client._request("https://arxiv.org/x").get_header("Authorization") is None
+    client.source = "zenodo"
+    assert client._request("https://zenodo.org/x").get_header("Authorization") is not None

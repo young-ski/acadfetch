@@ -13,7 +13,7 @@ doi     : 10.5281/zenodo.23612969
 license : cc-by-4.0
 files   : 1, 1.6 MiB
 landing : https://zenodo.org/records/23612969
-  Dinler Tarihi ... .pdf: 1.2 MiB
+Dinler Tarihi ... .pdf  1.2 MiB/1.6 MiB  312.4 KiB/s  ETA 0:02
 ok   Dinler Tarihi ... .pdf 1.6 MiB (resumed at 512.0 KiB)
 
 1/1 file(s) in ./data
@@ -68,11 +68,27 @@ acadfetch verify ./data/manifest.json          # re-hash a directory you downloa
 acadfetch sources                              # list adapters
 ```
 
+Progress is one aggregate line for the whole run (`3 file(s)  12.4/44.1 MiB  1.8 MiB/s  ETA 0:17`),
+redrawn in place on a TTY and written as occasional whole lines when stdout is a pipe.
+`-q` turns it off.
+
 Output defaults to `acadfetch-out/<source>-<doi-or-id>`. Files land in
 `<name>.part` and are renamed only after the checksum matches, so an interrupted
 run never leaves something that *looks* finished.
 
 Exit codes: `0` success, `1` failure, `2` partial, `130` interrupted (rerun to resume).
+
+## Tokens
+
+`ZENODO_TOKEN` and `FIGSHARE_TOKEN` are read from the environment and sent only
+to that repository, so a token never travels to a host that has no business
+seeing it. `--header` still overrides, `--no-token` ignores the environment, and
+the manifest records the variable name plus the last four characters only:
+
+```bash
+export ZENODO_TOKEN=...            # restricted records, higher rate limits
+acadfetch fetch zenodo:123456      # prints: auth    : token from $ZENODO_TOKEN (…9f2c)
+```
 
 ## Verification and the manifest
 
@@ -132,8 +148,8 @@ honest way to test this code path.
 
 ## Known limits
 
-- Auth is header-only (`--header`); no OAuth flow, so Zenodo *restricted* records
-  need a personal token pasted on the command line.
+- Tokens come from the environment only; no interactive `login` flow and no
+  per-file token refresh.
 - No search/pagination; you bring the target.
 - arXiv PDFs are fetched by constructed URL, so a withdrawn ID gives a 404 after
   resolution.

@@ -13,12 +13,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import consts, naming, verify
+from .auth import Token
 from .sources.base import Record, Result
 
 SCHEMA = 1
 
 
-def build(record: Record, results: list[Result]) -> dict:
+def build(record: Record, results: list[Result], token: Token | None = None) -> dict:
     by_url = {r.file.url: r for r in results}
     return {
         "schema": SCHEMA,
@@ -32,6 +33,8 @@ def build(record: Record, results: list[Result]) -> dict:
         "publisher": record.publisher,
         "version": record.version,
         "landing": record.landing,
+        # Provenance only: the variable name and a tail, never the secret.
+        "auth": {"env": token.env, "hint": token.hint} if token else None,
         "files": [
             {
                 "name": naming.sanitize(f.name),
