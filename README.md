@@ -1,6 +1,7 @@
 # acadfetch
 
 [![CI](https://github.com/young-ski/acadfetch/actions/workflows/ci.yml/badge.svg)](https://github.com/young-ski/acadfetch/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/acadfetch.svg)](https://pypi.org/project/acadfetch/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Batch-download files from academic data repositories — resumably, rate-limited, and
