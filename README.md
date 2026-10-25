@@ -157,7 +157,7 @@ honest way to test this code path.
 - No search/pagination; you bring the target.
 - arXiv PDFs are fetched by constructed URL, so a withdrawn ID gives a 404 after
   resolution.
-- Windows ARM and 3.14 are untested.
+- Windows ARM is untested.
 
 ## 中文
 
