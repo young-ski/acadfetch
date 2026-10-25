@@ -8,7 +8,7 @@
 
 ## 一句话状态
 
-`acadfetch` 0.1.0：学术数据仓库的批量下载器，断点续传 / 全局限速 / 校验和验证 / 落可复验的 manifest。**已公开在 <https://github.com/young-ski/acadfetch>，MIT，main 分支 HEAD `7de4768`，工作区干净，远程 `origin` 走 ssh，CI 9 个 job 全绿。**
+`acadfetch` 0.1.0：学术数据仓库的批量下载器，断点续传 / 全局限速 / 校验和验证 / 落可复验的 manifest。**已公开在 <https://github.com/young-ski/acadfetch>，MIT，工作区干净，远程 `origin` 走 ssh，CI 9 个 job 全绿。当前 HEAD 看 `git log`（最近的传输相关修复是 `7de4768`）。**
 
 已经能日常用：真实 Zenodo 记录下载、DOI 解析、512 KiB 处 kill 后续传成功、篡改文件后 `verify` 退出 1、figshare 下载端（`ndownloader`）2.1 MiB 实测跑通。**还没有** PyPI 发布、没有 release tag、没有 OAuth。
 
