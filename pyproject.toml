@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,15 +8,24 @@ version = "0.1.0"
 description = "Resumable, rate-limited, checksum-verified bulk downloads from academic data repositories"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "young-ski" }]
 keywords = ["zenodo", "figshare", "arxiv", "doi", "reproducibility", "download"]
 classifiers = [
+  "Development Status :: 4 - Beta",
   "Environment :: Console",
   "Intended Audience :: Science/Research",
-  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Scientific/Engineering",
+  "Typing :: Typed",
 ]
 
 [project.scripts]
@@ -24,6 +33,7 @@ acadfetch = "acadfetch.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/young-ski/acadfetch"
+Source = "https://github.com/young-ski/acadfetch"
 Issues = "https://github.com/young-ski/acadfetch/issues"
 
 [tool.setuptools.packages.find]
