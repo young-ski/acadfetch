@@ -1,0 +1,4 @@
+# Tests ship in the sdist (they are all offline), so their fixtures must too --
+# otherwise `pytest` after unpacking fails on missing files.
+recursive-include tests *.py
+recursive-include tests/fixtures *

@@ -14,6 +14,10 @@ from acadfetch.sources.base import File, Record
 FIXTURES = Path(__file__).parent / "fixtures"
 BLOCK = (FIXTURES / "figshare_403_block.html").read_bytes()
 FORBIDDEN = (FIXTURES / "figshare_403_forbidden.json").read_bytes()
+# A real figshare file and the md5 its payload publishes for it.
+REAL = (FIXTURES / "figshare_file.pdf").read_bytes()
+REAL_MD5 = "md5:bbde85208529e663141a0e8cb6fa9c4a"
+REAL_NAME = "3_Summary of Findings Across Studies_20261024_v2.pdf"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -353,3 +357,26 @@ def test_fallback_restarts_instead_of_appending(server, tmp_path):
     res = downloader.fetch_file(Client(rate=1000, retries=1), f, opts(tmp_path), set())
     assert res.state == "downloaded"
     assert (tmp_path / "a.bin").read_bytes() == payload
+
+
+# -- a real file against the checksum the repository published ------------
+
+
+def test_real_bytes_are_verified_against_the_published_md5(server, tmp_path):
+    server.cfg["files"]["/70600233"] = REAL
+    f = File(server.base + "/70600233", REAL_NAME, len(REAL), REAL_MD5)
+    res = downloader.fetch_file(Client(rate=1000, retries=1), f, opts(tmp_path), set())
+    assert res.state == "downloaded"
+    assert res.verified is True
+    assert (tmp_path / REAL_NAME).read_bytes() == REAL
+
+
+def test_one_flipped_byte_against_the_real_md5_fails(server, tmp_path):
+    tampered = bytearray(REAL)
+    tampered[-1] ^= 0xFF
+    server.cfg["files"]["/70600233"] = bytes(tampered)
+    f = File(server.base + "/70600233", REAL_NAME, len(REAL), REAL_MD5)
+    res = downloader.fetch_file(Client(rate=1000, retries=1), f, opts(tmp_path), set())
+    assert res.state == "failed"
+    assert "mismatch" in res.error
+    assert not (tmp_path / REAL_NAME).exists()
