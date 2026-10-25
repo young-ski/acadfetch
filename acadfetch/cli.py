@@ -42,6 +42,16 @@ def parse_size(text: str) -> int:
     return int(value * scale)
 
 
+def _count(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a whole number: {text!r}") from None
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"cannot retry {value} times")
+    return value
+
+
 def cmd_sources(_: argparse.Namespace) -> int:
     for name in registry.names():
         print(name)
@@ -54,6 +64,7 @@ def _client(args: argparse.Namespace) -> Client:
     return Client(
         rate=args.rate,
         retries=args.retries,
+        block_retries=args.retry_403,
         headers=_headers(args.header),
         auth={source: token.headers for source, token in tokens.items()},
     )
@@ -196,6 +207,14 @@ def build_parser() -> argparse.ArgumentParser:
             type=int,
             default=consts.DEFAULT_RETRIES,
             help="retries per request on 5xx/429/network errors (default: %(default)s)",
+        )
+        p.add_argument(
+            "--retry-403",
+            type=_count,
+            default=consts.WAF_403_RETRIES,
+            metavar="N",
+            help="retries for a WAF block page, i.e. a 403 with an HTML body; 0 makes "
+            "every 403 final (default: %(default)s)",
         )
         p.add_argument(
             "--header",

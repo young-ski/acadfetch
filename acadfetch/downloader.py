@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from . import consts, naming, verify
+from . import naming, verify
 from .client import Client
 from .consts import CHUNK
 from .errors import HttpError, PartialError
@@ -187,7 +187,7 @@ def _attempt(
                 last = exc
                 if exc.status == 0 and "exceeds --max-size" in str(exc):
                     return Result(file=file, state="failed", error=str(exc))
-                if exc.status == 403 and exc.transient and blocked < consts.WAF_403_RETRIES:
+                if exc.status == 403 and exc.transient and blocked < client.block_retries:
                     blocked += 1
                 elif exc.status in (401, 403, 404, 410):
                     break  # terminal for this URL; a fallback may still work

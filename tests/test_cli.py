@@ -4,7 +4,7 @@ import argparse
 
 import pytest
 
-from acadfetch import cli
+from acadfetch import cli, consts
 
 
 @pytest.mark.parametrize(
@@ -52,6 +52,22 @@ def test_header_without_colon_exits_1(capsys):
 def test_client_carries_headers():
     args = cli.build_parser().parse_args(["fetch", "zenodo:1", "--header", "X: y"])
     assert cli._client(args).headers == {"X": "y"}
+
+
+def test_retry_403_flag_reaches_the_client():
+    args = cli.build_parser().parse_args(["fetch", "zenodo:1", "--retry-403", "0"])
+    assert cli._client(args).block_retries == 0
+
+
+def test_retry_403_defaults_to_the_constant():
+    args = cli.build_parser().parse_args(["fetch", "zenodo:1"])
+    assert cli._client(args).block_retries == consts.WAF_403_RETRIES
+
+
+@pytest.mark.parametrize("bad", ["-1", "x", "1.5"])
+def test_retry_403_rejects(bad):
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["fetch", "zenodo:1", "--retry-403", bad])
 
 
 def _stub_resolve(monkeypatch, source="zenodo"):

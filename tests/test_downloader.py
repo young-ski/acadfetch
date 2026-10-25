@@ -309,6 +309,16 @@ def test_permission_403_fails_without_retrying(server, tmp_path):
     assert server.cfg["hits"]["/a.bin"] == 1
 
 
+def test_block_retries_zero_also_stops_the_transfer_retries(server, tmp_path):
+    """--retry-403 0 must not be re-added by the download layer."""
+    f = make_file(server, payload=b"w" * 500)
+    server.cfg["blocked"]["/a.bin"] = 99
+    client = Client(rate=1000, retries=1, block_retries=0)
+    res = downloader.fetch_file(client, f, opts(tmp_path), set())
+    assert res.state == "failed"
+    assert server.cfg["hits"]["/a.bin"] == 1
+
+
 def test_fallback_url_is_used_when_the_first_is_refused(server, tmp_path):
     payload = b"fallback bytes" * 40
     server.cfg["files"]["/alt.bin"] = payload

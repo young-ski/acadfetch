@@ -44,9 +44,9 @@ def is_block_page(detail: str, content_type: str | None) -> bool:
     return not head or head == "<"
 
 
-def _blocked_detail(detail: str) -> str:
+def _blocked_detail(detail: str, retries: int) -> str:
     """Block-page markup is noise in a one-line error; name it instead."""
-    gave_up = f"gave up after {consts.WAF_403_RETRIES} retries"
+    gave_up = f"gave up after {retries} retr{'y' if retries == 1 else 'ies'}"
     if detail.startswith("<"):
         return f"WAF block page, {gave_up}"
     return f"{detail} (WAF block page, {gave_up})"
@@ -80,11 +80,15 @@ class Client:
         user_agent: str = consts.USER_AGENT,
         headers: Mapping[str, str] | None = None,
         auth: Mapping[str, Mapping[str, str]] | None = None,
+        block_retries: int = consts.WAF_403_RETRIES,
     ) -> None:
         self.bucket = TokenBucket(rate)
         self.retries = max(0, retries)
         self.timeout = timeout
         self.user_agent = user_agent
+        # How often a WAF block page is worth retrying. 0 turns the feature
+        # off, which is what a run from a network the WAF likes wants.
+        self.block_retries = max(0, block_retries)
         self.headers = dict(headers or {})
         # Per-source credentials. The registry sets ``source`` before dispatch
         # so a Zenodo token is never sent to figshare.
@@ -115,9 +119,9 @@ class Client:
     def _open(self, req: urllib.request.Request):  # noqa: ANN202
         return urllib.request.urlopen(req, timeout=self.timeout)
 
-    def _with_retries(
-        self, url: str, fn, headers=None, block_retries: int = consts.WAF_403_RETRIES
-    ):  # noqa: ANN001, ANN202
+    def _with_retries(self, url: str, fn, headers=None, block_retries: int | None = None):  # noqa: ANN001, ANN202
+        if block_retries is None:
+            block_retries = self.block_retries
         last: Exception | None = None
         last_detail = ""
         last_blocked = False
@@ -141,7 +145,9 @@ class Client:
                 elif not last_blocked:
                     raise HttpError(exc.code, url, detail) from exc
                 elif waf >= block_retries:
-                    raise HttpError(403, url, _blocked_detail(last_detail), transient=True) from exc
+                    raise HttpError(
+                        403, url, _blocked_detail(last_detail, block_retries), transient=True
+                    ) from exc
                 else:
                     waf += 1
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
@@ -151,7 +157,7 @@ class Client:
             if attempt < self.retries:
                 self._sleep(attempt, retry_after)
         if isinstance(last, urllib.error.HTTPError):
-            detail = _blocked_detail(last_detail) if last_blocked else last_detail
+            detail = _blocked_detail(last_detail, waf) if last_blocked else last_detail
             raise HttpError(last.code, url, detail, transient=True) from last
         raise HttpError(0, url, last_detail or str(last)) from last
 

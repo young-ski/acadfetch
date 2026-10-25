@@ -149,3 +149,25 @@ def test_head_tolerates_a_block_page_without_retrying(fast):
     calls = fast([http_error(403, BLOCK, "text/html") for _ in range(9)])
     assert Client(rate=1000, retries=4).head(URL) == {}
     assert len(calls) == 1
+
+
+def test_block_retries_zero_makes_a_block_page_final(fast):
+    calls = fast([http_error(403, BLOCK, "text/html"), b"never"])
+    with pytest.raises(HttpError) as info:
+        Client(rate=1000, retries=4, block_retries=0).open(URL)
+    assert info.value.status == 403
+    assert info.value.transient is True
+    assert "gave up after 0 retries" in str(info.value)
+    assert len(calls) == 1
+
+
+def test_block_retries_can_be_raised(fast):
+    script = [http_error(403, BLOCK, "text/html") for _ in range(4)] + [b"ok"]
+    calls = fast(script)
+    with Client(rate=1000, retries=9, block_retries=4).open(URL) as resp:
+        assert resp.read() == b"ok"
+    assert len(calls) == 5
+
+
+def test_negative_block_retries_is_clamped():
+    assert Client(rate=1000, block_retries=-3).block_retries == 0

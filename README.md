@@ -130,11 +130,15 @@ a 403 that is the API's own permission error is still terminal. Downloads
 themselves go to `ndownloader`, which the WAF leaves alone. The payload shapes
 are pinned in `tests/fixtures/`.
 
+If you know your network gets through, `--retry-403 0` skips the retries
+entirely and makes every 403 final on the first answer.
+
 ## Politeness
 
 Defaults: 3 parallel transfers, 2 requests/second, 4 retries with jittered
-exponential backoff, `Retry-After` honoured up to 120 s. Zenodo and arXiv are
-donation-funded — `--rate 1 -j 1` costs you minutes and costs them less.
+exponential backoff, `Retry-After` honoured up to 120 s. A WAF block page is
+retried twice (`--retry-403 N`); Zenodo and arXiv are donation-funded —
+`--rate 1 -j 1` costs you minutes and costs them less.
 
 Respect the license in the manifest. `--dry-run` prints it before you spend
 bandwidth; `unknown` means *check before redistributing*.
