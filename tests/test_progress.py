@@ -136,6 +136,28 @@ def test_finish_is_idempotent():
     assert stream.getvalue().count("\n") == count
 
 
+def test_finish_stays_quiet_when_nothing_transferred():
+    """Every file skipped: no frame, the per-file rows and the tally speak."""
+    prog, stream, _ = make(tty=False)
+    prog.finish()
+    assert stream.getvalue() == ""
+    assert prog.enabled is False
+
+
+def test_finish_stays_quiet_on_a_tty_when_nothing_transferred():
+    prog, stream, _ = make(tty=True)
+    prog.finish()
+    assert stream.getvalue() == ""
+
+
+def test_one_transferred_file_still_gets_a_finish_frame():
+    prog, stream, _ = make(tty=False)
+    prog.start("a", 10)
+    prog.advance(10)
+    prog.finish()
+    assert stream.getvalue().strip().split("\n")[-1].endswith("10 B")
+
+
 def test_closed_stream_disables_instead_of_raising():
     prog = Progress(stream=io.StringIO(), enabled=True, is_tty=False)
     prog.stream.close()

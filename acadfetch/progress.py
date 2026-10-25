@@ -49,6 +49,7 @@ class Progress:
         self._printed = 0
         self._last_count = 0
         self._dirty = False
+        self._wrote = False
 
     # -- structure ---------------------------------------------------------
     def start(self, name: str, size: int | None) -> None:
@@ -142,15 +143,19 @@ class Progress:
             else:
                 self.stream.write(line + ("\n" if newline else ""))
             self.stream.flush()
+            self._wrote = True
         except (OSError, ValueError):  # stream closed under us
             self.enabled = False
 
     def finish(self) -> None:
         if not self.enabled:
             return
-        line = self._render()
-        self._write(line, newline=True)
-        if self.is_tty:
-            self.stream.write("\n")
-            self.stream.flush()
+        # A run where every file was already on disk never started one, so a
+        # frame here would only say "0 file(s) 0 B" right before the tally.
+        if self._wrote:
+            line = self._render()
+            self._write(line, newline=True)
+            if self.is_tty:
+                self.stream.write("\n")
+                self.stream.flush()
         self.enabled = False

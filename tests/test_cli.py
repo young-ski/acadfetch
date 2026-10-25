@@ -92,3 +92,16 @@ def test_token_only_loaded_for_its_own_source(monkeypatch):
     assert client._request("https://arxiv.org/x").get_header("Authorization") is None
     client.source = "zenodo"
     assert client._request("https://zenodo.org/x").get_header("Authorization") is not None
+
+
+def test_fully_skipped_run_prints_no_empty_progress_frame(monkeypatch, capsys, tmp_path):
+    """The re-run case: nothing moves, so "0 file(s) 0 B" would contradict the tally."""
+    _stub_resolve(monkeypatch)
+    out = tmp_path / "data"
+    out.mkdir()
+    (out / "f").write_bytes(b"payload")
+    assert cli.main(["fetch", "zenodo:1", "-o", str(out)]) == 0
+    printed = capsys.readouterr().out
+    assert "skip f" in printed
+    assert "0 file(s)" not in printed
+    assert "1/1 file(s)" in printed
