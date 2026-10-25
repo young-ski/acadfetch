@@ -11,6 +11,10 @@ from acadfetch import downloader
 from acadfetch.client import Client
 from acadfetch.sources.base import File, Record
 
+FIXTURES = Path(__file__).parent / "fixtures"
+BLOCK = (FIXTURES / "figshare_403_block.html").read_bytes()
+FORBIDDEN = (FIXTURES / "figshare_403_forbidden.json").read_bytes()
+
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -18,14 +22,29 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):  # silence
         pass
 
+    def _refuse(self, body: bytes, content_type: str) -> None:
+        self.send_response(403)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
+
     def do_GET(self):  # noqa: N802
         cfg = self.server.cfg
         path = self.path.split("?")[0]
+        cfg["hits"][path] = cfg["hits"].get(path, 0) + 1
+        if path in cfg["forbidden"]:
+            self._refuse(FORBIDDEN, "application/json")
+            return
+        if cfg["blocked"].get(path, 0) > 0:
+            cfg["blocked"][path] -= 1
+            self._refuse(BLOCK, "text/html")
+            return
         if path not in cfg["files"]:
             self.send_error(404)
             return
         payload = cfg["files"][path]
-        cfg["hits"][path] = cfg["hits"].get(path, 0) + 1
 
         start = 0
         wanted = self.headers.get("Range")
@@ -50,7 +69,15 @@ class Handler(BaseHTTPRequestHandler):
 @pytest.fixture
 def server():
     srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    srv.cfg = {"files": {}, "hits": {}, "etag": '"v1"', "ignore_range": False, "truncate_at": None}
+    srv.cfg = {
+        "files": {},
+        "hits": {},
+        "etag": '"v1"',
+        "ignore_range": False,
+        "truncate_at": None,
+        "blocked": {},
+        "forbidden": set(),
+    }
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
     srv.base = f"http://127.0.0.1:{srv.server_address[1]}"
@@ -233,3 +260,86 @@ def test_skipped_file_never_starts_progress(server, tmp_path):
     o.progress = rec
     downloader.fetch_file(Client(rate=100, retries=1), f, o, set())
     assert rec.calls == []
+
+
+# -- 403s: block pages are transient, permission errors are not -----------
+
+
+def test_block_page_403_is_retried(server, tmp_path):
+    payload = b"w" * 500
+    f = make_file(server, payload=payload, checksum="sha256:" + hashlib.sha256(payload).hexdigest())
+    server.cfg["blocked"]["/a.bin"] = 2
+    res = downloader.fetch_file(Client(rate=1000, retries=1), f, opts(tmp_path), set())
+    assert res.state == "downloaded"
+    assert res.verified is True
+    assert (tmp_path / "a.bin").read_bytes() == payload
+
+
+def test_block_page_403_keeps_the_partial_file(server, tmp_path):
+    payload = b"0123456789" * 50
+    f = make_file(server, payload=payload, checksum="sha256:" + hashlib.sha256(payload).hexdigest())
+    (tmp_path / "a.bin.part").write_bytes(payload[:120])
+    (tmp_path / "a.bin.part.meta.json").write_text(
+        f'{{"url": "{f.url}", "etag": "\\"v1\\""}}', "utf-8"
+    )
+    server.cfg["blocked"]["/a.bin"] = 1
+    res = downloader.fetch_file(Client(rate=1000, retries=1), f, opts(tmp_path), set())
+    assert res.state == "downloaded"
+    assert res.resumed_from == 120
+    assert (tmp_path / "a.bin").read_bytes() == payload
+
+
+def test_block_page_403_is_capped(server, tmp_path):
+    """A permanently blocking host must not be hammered forever."""
+    f = make_file(server, payload=b"w" * 500)
+    server.cfg["blocked"]["/a.bin"] = 99
+    res = downloader.fetch_file(Client(rate=1000, retries=1), f, opts(tmp_path), set())
+    assert res.state == "failed"
+    assert "403" in res.error
+    assert 3 <= server.cfg["hits"]["/a.bin"] <= 6
+    assert not (tmp_path / "a.bin.part").exists()
+
+
+def test_permission_403_fails_without_retrying(server, tmp_path):
+    f = make_file(server, payload=b"w" * 500)
+    server.cfg["forbidden"].add("/a.bin")
+    res = downloader.fetch_file(Client(rate=1000, retries=1), f, opts(tmp_path), set())
+    assert res.state == "failed"
+    assert "403" in res.error
+    assert server.cfg["hits"]["/a.bin"] == 1
+
+
+def test_fallback_url_is_used_when_the_first_is_refused(server, tmp_path):
+    payload = b"fallback bytes" * 40
+    server.cfg["files"]["/alt.bin"] = payload
+    server.cfg["forbidden"].add("/a.bin")
+    f = File(
+        url=server.base + "/a.bin",
+        name="a.bin",
+        size=len(payload),
+        checksum="sha256:" + hashlib.sha256(payload).hexdigest(),
+        fallbacks=[server.base + "/alt.bin"],
+    )
+    res = downloader.fetch_file(Client(rate=1000, retries=1), f, opts(tmp_path), set())
+    assert res.state == "downloaded"
+    assert res.verified is True
+    assert (tmp_path / "a.bin").read_bytes() == payload
+    assert server.cfg["hits"]["/alt.bin"] == 1
+
+
+def test_fallback_restarts_instead_of_appending(server, tmp_path):
+    payload = b"F" * 400
+    server.cfg["files"]["/alt.bin"] = payload
+    server.cfg["forbidden"].add("/a.bin")
+    (tmp_path / "a.bin.part").write_bytes(b"stale")
+    (tmp_path / "a.bin.part.meta.json").write_text(f'{{"url": "{server.base}/a.bin"}}', "utf-8")
+    f = File(
+        url=server.base + "/a.bin",
+        name="a.bin",
+        size=len(payload),
+        checksum="sha256:" + hashlib.sha256(payload).hexdigest(),
+        fallbacks=[server.base + "/alt.bin"],
+    )
+    res = downloader.fetch_file(Client(rate=1000, retries=1), f, opts(tmp_path), set())
+    assert res.state == "downloaded"
+    assert (tmp_path / "a.bin").read_bytes() == payload

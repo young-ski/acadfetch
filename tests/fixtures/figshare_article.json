@@ -1,0 +1,32 @@
+{
+  "id": 13054873,
+  "title": "Example dataset: stream macroinvertebrate counts",
+  "doi": "10.6084/m9.figshare.13054873.v2",
+  "url_public_html": "https://figshare.com/articles/dataset/Example_dataset/13054873",
+  "url_api": "https://api.figshare.com/v2/articles/13054873",
+  "defined_type_name": "dataset",
+  "published_date": "2020-11-18T10:12:31Z",
+  "license": {
+    "name": "CC BY 4.0",
+    "url": "https://creativecommons.org/licenses/by/4.0/",
+    "value": 1
+  },
+  "files": [
+    {
+      "id": 24641751,
+      "name": "counts.csv",
+      "size": 52,
+      "mimetype": "text/csv",
+      "download_url": "https://ndownloader.figshare.com/files/24641751",
+      "computed_md5": "85b1e8f47065718ecdc5919244eac63c",
+      "supplied_md5": "85b1e8f47065718ecdc5919244eac63c"
+    },
+    {
+      "id": 24641752,
+      "name": "method notes.txt",
+      "size": 16,
+      "mimetype": "text/plain",
+      "computed_md5": "3eb609cf586bd8bebed94b25a4f2ec4d"
+    }
+  ]
+}

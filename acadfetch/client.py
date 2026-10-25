@@ -23,6 +23,33 @@ from .ratelimit import TokenBucket
 RETRY_STATUS = {408, 425, 429, 500, 502, 503, 504}
 MAX_RETRY_AFTER = 120.0
 MAX_JSON = 32 << 20
+SNIPPET = 200
+
+
+def is_block_page(detail: str, content_type: str | None) -> bool:
+    """Tell a WAF/load-balancer 403 apart from the API's own permission 403.
+
+    Block pages are HTML or empty (AWS ELB, Cloudflare and friends all ship
+    one — see ``tests/fixtures/figshare_403_block.html``); a repository's real
+    permission error is JSON or plain text from the application itself. Both
+    ``api.figshare.com`` endpoints answer the HTML one intermittently, and it
+    clears within a retry or two, so it must not be terminal.
+
+    An empty body counts as a block page: retrying costs one request, while
+    misreading it as terminal costs the whole download.
+    """
+    if content_type and "html" in content_type.lower():
+        return True
+    head = detail.lstrip()[:1]
+    return not head or head == "<"
+
+
+def _blocked_detail(detail: str) -> str:
+    """Block-page markup is noise in a one-line error; name it instead."""
+    gave_up = f"gave up after {consts.WAF_403_RETRIES} retries"
+    if detail.startswith("<"):
+        return f"WAF block page, {gave_up}"
+    return f"{detail} (WAF block page, {gave_up})"
 
 
 def parse_retry_after(value: str | None) -> float | None:
@@ -88,29 +115,45 @@ class Client:
     def _open(self, req: urllib.request.Request):  # noqa: ANN202
         return urllib.request.urlopen(req, timeout=self.timeout)
 
-    def _with_retries(self, url: str, fn, headers=None):  # noqa: ANN001, ANN202
+    def _with_retries(
+        self, url: str, fn, headers=None, block_retries: int = consts.WAF_403_RETRIES
+    ):  # noqa: ANN001, ANN202
         last: Exception | None = None
+        last_detail = ""
+        last_blocked = False
+        waf = 0
         for attempt in range(self.retries + 1):
             self.bucket.acquire()
+            retry_after = None
             try:
                 return fn(self._request(url, headers))
             except urllib.error.HTTPError as exc:
                 last = exc
-                if exc.code not in RETRY_STATUS:
-                    detail = _snippet(exc)
-                    raise HttpError(exc.code, url, detail) from exc
+                last_detail = detail = _snippet(exc)
+                content_type = exc.headers.get("Content-Type") if exc.headers else None
+                last_blocked = exc.code == 403 and is_block_page(detail, content_type)
                 retry_after = parse_retry_after(
                     exc.headers.get("Retry-After") if exc.headers else None
                 )
                 exc.close()
+                if exc.code in RETRY_STATUS:
+                    pass
+                elif not last_blocked:
+                    raise HttpError(exc.code, url, detail) from exc
+                elif waf >= block_retries:
+                    raise HttpError(403, url, _blocked_detail(last_detail), transient=True) from exc
+                else:
+                    waf += 1
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 last = exc
-                retry_after = None
+                last_detail = str(exc)
+                last_blocked = False
             if attempt < self.retries:
                 self._sleep(attempt, retry_after)
         if isinstance(last, urllib.error.HTTPError):
-            raise HttpError(last.code, url, _snippet(last)) from last
-        raise HttpError(0, url, str(last)) from last
+            detail = _blocked_detail(last_detail) if last_blocked else last_detail
+            raise HttpError(last.code, url, detail, transient=True) from last
+        raise HttpError(0, url, last_detail or str(last)) from last
 
     # -- public ------------------------------------------------------------
     def open(self, url: str, headers: Mapping[str, str] | None = None):
@@ -131,7 +174,7 @@ class Client:
             return self._open(req)
 
         try:
-            with self._with_retries(url, _head) as resp:
+            with self._with_retries(url, _head, block_retries=0) as resp:
                 return dict(resp.headers)
         except HttpError as exc:
             if exc.status in (403, 405, 501):
@@ -141,10 +184,11 @@ class Client:
 
 def _snippet(exc: urllib.error.HTTPError) -> str:
     try:
-        text = exc.read(200).decode("utf-8", "replace").strip()
+        raw = exc.read(SNIPPET)
     except Exception:  # noqa: BLE001
         return ""
-    return " ".join(text.split())[:200]
+    text = " ".join(raw.decode("utf-8", "replace").split())
+    return text[:SNIPPET]
 
 
 def checksum_of(headers: Mapping[str, str]) -> str | None:

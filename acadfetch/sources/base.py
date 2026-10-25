@@ -11,6 +11,9 @@ class File:
     name: str
     size: int | None = None
     checksum: str | None = None
+    #: Tried in order when ``url`` is refused with a 403, e.g. a legacy
+    #: endpoint for the same bytes.
+    fallbacks: list[str] = field(default_factory=list)
 
 
 @dataclass

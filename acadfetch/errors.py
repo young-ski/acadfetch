@@ -16,11 +16,17 @@ class SourceError(AcFError):
 
 
 class HttpError(AcFError):
-    """An HTTP request failed after all retries."""
+    """An HTTP request failed after all retries.
 
-    def __init__(self, status: int, url: str, detail: str = "") -> None:
+    ``transient`` marks a failure that is worth retrying further up, currently
+    only a 403 that came from a WAF/load-balancer block page rather than from
+    the API's own permission check.
+    """
+
+    def __init__(self, status: int, url: str, detail: str = "", transient: bool = False) -> None:
         self.status = status
         self.url = url
+        self.transient = transient
         super().__init__(f"HTTP {status} for {url}{': ' + detail if detail else ''}")
 
 

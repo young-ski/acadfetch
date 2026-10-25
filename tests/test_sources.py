@@ -1,9 +1,20 @@
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
+
 import pytest
 
-from acadfetch.errors import TargetError
+from acadfetch import verify
+from acadfetch.errors import SourceError, TargetError
 from acadfetch.sources import arxiv, direct, doi, figshare, registry, zenodo
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def fixture(name: str) -> dict:
+    return json.loads((FIXTURES / name).read_text("utf-8"))
 
 
 class FakeClient:
@@ -157,3 +168,69 @@ def test_unregistered_doi_raises():
     client = FakeClient({"doi.org/api/handles": {"responseCode": 100}})
     with pytest.raises(TargetError, match="not registered"):
         doi.resolve(client, "10.9999/nope")
+
+
+# -- figshare, against the recorded payload -------------------------------
+
+SAMPLE = {
+    "counts.csv": b"site,taxon,count\nA,Ephemeroptera,12\nB,Trichoptera,7\n",
+    "method notes.txt": b"kick-net, 500um\n",
+}
+
+
+def figshare_record() -> dict:
+    return figshare.resolve(
+        FakeClient({"articles/13054873": fixture("figshare_article.json")}), "figshare:13054873"
+    )
+
+
+def test_figshare_resolve_maps_the_payload():
+    record = figshare_record()
+    assert [f.name for f in record.files] == ["counts.csv", "method notes.txt"]
+    assert record.source == "figshare"
+    assert record.title.startswith("Example dataset")
+    assert record.doi == "10.6084/m9.figshare.13054873.v2"
+    assert record.license == "CC BY 4.0"
+    assert record.landing.endswith("/13054873")
+    assert record.total_bytes == 68
+
+
+def test_figshare_prefers_the_download_url_and_keeps_the_legacy_one():
+    csv, notes = figshare_record().files
+    assert csv.url == "https://ndownloader.figshare.com/files/24641751"
+    assert csv.fallbacks == [
+        "https://api.figshare.com/v2/articles/13054873/files/24641751/download"
+    ]
+    # Without a download_url the legacy endpoint is the primary, not a fallback.
+    assert notes.url == "https://api.figshare.com/v2/articles/13054873/files/24641752/download"
+    assert notes.fallbacks == []
+
+
+def test_figshare_uses_computed_md5_not_the_supplied_one():
+    payload = fixture("figshare_article.json")
+    payload["files"][0]["supplied_md5"] = "0" * 32  # what the uploader claimed
+    record = figshare.resolve(FakeClient({"articles/13054873": payload}), "figshare:13054873")
+    algo, expected = verify.parse(record.files[0].checksum)
+    assert algo == "md5"
+    assert hashlib.md5(SAMPLE["counts.csv"]).hexdigest() == expected
+
+
+def test_figshare_fixture_checksums_match_its_bytes():
+    for item in figshare_record().files:
+        _, expected = verify.parse(item.checksum)
+        assert hashlib.md5(SAMPLE[item.name]).hexdigest() == expected
+        assert item.size == len(SAMPLE[item.name])
+
+
+def test_figshare_files_without_url_or_id_are_skipped():
+    payload = fixture("figshare_article.json")
+    payload["files"].append({"name": "ghost.txt"})
+    record = figshare.resolve(FakeClient({"articles/13054873": payload}), "figshare:13054873")
+    assert [f.name for f in record.files] == ["counts.csv", "method notes.txt"]
+
+
+def test_figshare_without_files_raises():
+    payload = fixture("figshare_article.json")
+    payload["files"] = []
+    with pytest.raises(SourceError, match="no downloadable files"):
+        figshare.resolve(FakeClient({"articles/13054873": payload}), "figshare:13054873")

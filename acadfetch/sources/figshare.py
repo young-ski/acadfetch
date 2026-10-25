@@ -1,8 +1,25 @@
 """Figshare adapter.
 
 The v2 public API returns ``computed_md5`` for every file, so verification is
-available. Note that the endpoint is behind a WAF that rejects default Python
-User-Agents, which is one reason every request goes through our Client.
+available. Note that the API sits behind a WAF that intermittently rejects
+non-browser clients, which is one reason every request goes through our Client.
+
+Statuses actually observed here, and what they are allowed to do:
+
+| Status | Body | Meaning | Behaviour |
+| --- | --- | --- | --- |
+| 403 | ``text/html`` block page | WAF / load balancer, intermittent | retried twice, then the legacy endpoint |
+| 403 | JSON ``{"message": "Forbidden"}`` | the files really are restricted | terminal |
+| 429, 5xx | — | overload | retried by ``Client`` |
+| 404 | JSON ``EntityNotFound`` | wrong id | terminal |
+
+The block page is an AWS ELB default page
+(``tests/fixtures/figshare_403_block.html``); the distinction is decided in
+:func:`acadfetch.client.is_block_page`, not here.
+
+Downloads go to ``download_url`` (``ndownloader``), which the WAF does not
+touch. The legacy ``/v2/articles/{id}/files/{file_id}/download`` endpoint is
+kept as a per-file fallback for the case where ``download_url`` is refused.
 """
 
 from __future__ import annotations
@@ -14,6 +31,7 @@ from ..errors import SourceError
 from .base import File, Record
 
 API = "https://api.figshare.com/v2/articles/{id}"
+LEGACY = "https://api.figshare.com/v2/articles/{id}/files/{file_id}/download"
 
 _PATTERNS = [
     re.compile(r"^figshare:(\d+)$", re.I),
@@ -36,16 +54,23 @@ def resolve(client: Client, target: str) -> Record:
         raise SourceError(f"not a Figshare reference: {target}")
 
     payload = client.get_json(API.format(id=article_id))
-    files = [
-        File(
-            url=item["download_url"],
-            name=item.get("name") or "file",
-            size=item.get("size"),
-            checksum=f"md5:{item['computed_md5']}" if item.get("computed_md5") else None,
+    files = []
+    for item in payload.get("files") or []:
+        url = item.get("download_url")
+        file_id = item.get("id")
+        legacy = LEGACY.format(id=article_id, file_id=file_id) if file_id else None
+        if not url and not legacy:
+            continue
+        md5 = item.get("computed_md5")
+        files.append(
+            File(
+                url=url or legacy,
+                name=item.get("name") or "file",
+                size=item.get("size"),
+                checksum=f"md5:{md5}" if md5 else None,
+                fallbacks=[legacy] if url and legacy else [],
+            )
         )
-        for item in payload.get("files") or []
-        if item.get("download_url")
-    ]
     if not files:
         raise SourceError(f"Figshare article {article_id} publishes no downloadable files")
 

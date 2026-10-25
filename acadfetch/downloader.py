@@ -18,10 +18,10 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-from . import naming, verify
+from . import consts, naming, verify
 from .client import Client
 from .consts import CHUNK
 from .errors import HttpError, PartialError
@@ -166,24 +166,44 @@ def _attempt(
     opts: Options,
     resumed_from: int,
 ) -> Result:
-    """Retry loop, verification and final rename for one file."""
+    """Retry loop, verification and final rename for one file.
+
+    A 403 that looks like a WAF block page is retried a couple of times with
+    the partial file kept, then the file's fallback URLs are tried (a legacy
+    endpoint for the same bytes). Everything else terminal fails immediately.
+    """
     last: Exception | None = None
-    for attempt in range(opts.retries + 1):
-        try:
-            _transfer(client, file, part, meta_path, opts)
+    blocked = 0
+    candidates = [file.url, *file.fallbacks]
+    done = False
+    for index, url in enumerate(candidates):
+        source = file if url == file.url else replace(file, url=url)
+        for attempt in range(opts.retries + 1):
+            try:
+                _transfer(client, source, part, meta_path, opts)
+                done = True
+                break
+            except HttpError as exc:
+                last = exc
+                if exc.status == 0 and "exceeds --max-size" in str(exc):
+                    return Result(file=file, state="failed", error=str(exc))
+                if exc.status == 403 and exc.transient and blocked < consts.WAF_403_RETRIES:
+                    blocked += 1
+                elif exc.status in (401, 403, 404, 410):
+                    break  # terminal for this URL; a fallback may still work
+            except (OSError, ConnectionError) as exc:
+                last = exc
+            if attempt < opts.retries:
+                time.sleep(min(2**attempt, 10))
+                resumed_from = part.stat().st_size if part.exists() else 0
+        if done:
             break
-        except HttpError as exc:
-            last = exc
-            if exc.status == 0 and "exceeds --max-size" in str(exc):
-                return Result(file=file, state="failed", error=str(exc))
-            if exc.status in (401, 403, 404, 410):
-                _drop(part, meta_path)
-                return Result(file=file, state="failed", error=str(exc))
-        except (OSError, ConnectionError) as exc:
-            last = exc
-        if attempt < opts.retries:
-            time.sleep(min(2**attempt, 10))
-            resumed_from = part.stat().st_size if part.exists() else 0
+        if index < len(candidates) - 1:
+            _drop(part, meta_path)
+            resumed_from = 0
+            continue
+        _drop(part, meta_path)
+        return Result(file=file, state="failed", error=str(last))
 
     if last is not None and not part.exists():
         return Result(file=file, state="failed", error=str(last))

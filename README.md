@@ -123,8 +123,12 @@ count and `verified` is `null` rather than a false sense of safety.
 | doi.org | any DOI, resolved then dispatched | depends |
 | direct | any `http(s)` URL | headers, if present |
 
-Figshare is implemented but currently behind a WAF that intermittently 403s;
-adding a token/UA override is tracked in the issue template.
+Figshare's API sits behind a WAF that intermittently answers 403 to non-browser
+clients (an AWS ELB block page, some networks always, some never). Those 403s
+are retried twice with backoff, then the legacy per-file endpoint is tried;
+a 403 that is the API's own permission error is still terminal. Downloads
+themselves go to `ndownloader`, which the WAF leaves alone. The payload shapes
+are pinned in `tests/fixtures/`.
 
 ## Politeness
 
