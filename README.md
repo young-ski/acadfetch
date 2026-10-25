@@ -42,9 +42,9 @@ cite.
 Python 3.10+. No runtime dependencies.
 
 ```bash
+pipx install acadfetch
+# or, from a checkout
 pipx install git+https://github.com/young-ski/acadfetch
-# or
-git clone https://github.com/young-ski/acadfetch && cd acadfetch
 python -m pip install -e .
 ```
 
