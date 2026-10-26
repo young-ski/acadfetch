@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "acadfetch"
-version = "0.1.0"
+version = "0.1.1"
 description = "Resumable, rate-limited, checksum-verified bulk downloads from academic data repositories"
 readme = "README.md"
 requires-python = ">=3.10"

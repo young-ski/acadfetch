@@ -6,6 +6,24 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-26
+
+### Fixed
+
+- `os.replace` fails on NTFS while any other handle holds the target, and the
+  manifest write happens after the download: a concurrent reader turned a
+  successful transfer into a traceback with exit 1 and an orphan `.tmp`.
+  Replacing and reading a file now retry a sharing violation briefly; a lock
+  that outlasts them is one line and exit 2, with no leftovers.
+- Ctrl-C could not stop a transfer. `KeyboardInterrupt` only reaches the main
+  thread, so with `-j 3` the workers downloaded to the end and renamed the file,
+  and a silent socket swallowed the interrupt for the full 60 s timeout. Reads
+  poll, an interrupt closes the live responses, and the run now returns what
+  finished, keeps the `.part`, writes the manifest and exits 130.
+- arXiv requests go over https and close their response; the API's current
+  `Connection: close` was hiding a missing `with`, and `resolve()` had no test.
+- The unknown-target error is one line again.
+
 ### Changed
 
 - `verify` reports a name that leaves the root as `escaped` and exits 1 instead
@@ -15,8 +33,6 @@ pre-1.0: a minor bump may break a flag.
   restores the old behaviour, `--root` decides what counts as inside. Paths that
   use `..` but stay inside keep working, and the Windows-drive form no longer
   silently becomes a relative directory on POSIX.
-
-### Fixed
 
 - `verify` resolved names against the working directory instead of the
   manifest's own, so the command in this README failed on healthy data.
@@ -45,7 +61,6 @@ pre-1.0: a minor bump may break a flag.
 - `SECURITY.md`, a bug template, a PR template with the invariants as a
   checklist, `CODEOWNERS`, a first-PR path in `CONTRIBUTING.md`.
 
-## [0.1.0] - 2026-10-25
 
 First release. Nothing here has a previous behaviour to be compatible with,
 so it is all "Added" — the list doubles as an honest statement of scope.
@@ -92,5 +107,6 @@ so it is all "Added" — the list doubles as an honest statement of scope.
 - figshare was verified end to end from a Japanese network only; the API's
   WAF answers 403 outright from some networks (see `--retry-403`).
 
-[Unreleased]: https://github.com/young-ski/acadfetch/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/young-ski/acadfetch/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/young-ski/acadfetch/releases/tag/v0.1.1
 [0.1.0]: https://github.com/young-ski/acadfetch/releases/tag/v0.1.0
