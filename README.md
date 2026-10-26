@@ -204,3 +204,9 @@ acadfetch verify ./data/manifest.json
 ```
 
 MIT。
+
+## Audit trail
+
+How the 3.15 support claim was reached, including what it did **not** prove —
+the free-threaded build, Windows ARM, and every place the probe ran short:
+[docs/py315-windows-report.md](docs/py315-windows-report.md).

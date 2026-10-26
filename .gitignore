@@ -11,3 +11,7 @@ out/
 *.part
 *.part.meta.json
 .tmp/
+
+# test/build debris
+.coverage
+htmlcov/
