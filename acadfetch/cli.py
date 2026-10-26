@@ -160,10 +160,22 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         if row.error:
             print(f"     {row.error}")
 
-    manifest.write(out_dir / "manifest.json", manifest.build(record, results, token))
+    data = manifest.build(record, results, token)
+    try:
+        manifest.write(out_dir / "manifest.json", data)
+    except OSError as exc:
+        # The bytes may all be on disk; losing the manifest is a partial
+        # outcome, not a crash.
+        print(f"acadfetch: could not write the manifest: {exc}", file=sys.stderr)
+        print(f"{len(results) - len(failures)}/{len(results)} file(s) in {out_dir}")
+        return EXIT_PARTIAL if len(results) > len(failures) else EXIT_FAIL
     print(f"\n{len(results) - len(failures)}/{len(results)} file(s) in {out_dir}")
     if args.manifest_out:
-        manifest.write(Path(args.manifest_out), manifest.build(record, results, token))
+        try:
+            manifest.write(Path(args.manifest_out), data)
+        except OSError as exc:
+            print(f"acadfetch: could not write {args.manifest_out}: {exc}", file=sys.stderr)
+            return EXIT_PARTIAL
 
     if failures and len(failures) == len(results):
         return EXIT_FAIL

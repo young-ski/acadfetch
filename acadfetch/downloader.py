@@ -12,9 +12,7 @@ Resume is built on three ideas:
 
 from __future__ import annotations
 
-import contextlib
 import json
-import os
 import random
 import threading
 import time
@@ -22,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from . import naming, verify
+from . import atomic, naming, verify
 from .client import Client
 from .consts import CHUNK
 from .errors import HttpError, PartialError
@@ -55,13 +53,12 @@ def _read_meta(path: Path) -> dict:
 def _write_meta(path: Path, data: dict) -> None:
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data), "utf-8")
-    os.replace(tmp, path)
+    atomic.replace(tmp, path)
 
 
 def _drop(*paths: Path) -> None:
     for path in paths:
-        with contextlib.suppress(OSError):
-            path.unlink()
+        atomic.unlink(path)
 
 
 def _content_length(headers, url: str) -> int | None:
@@ -276,7 +273,7 @@ def _attempt(
             _drop(part, meta_path)
             return Result(file=file, state="failed", error="checksum mismatch")
 
-    os.replace(part, final)
+    atomic.replace(part, final)
     _drop(meta_path)
     return Result(
         file=file,

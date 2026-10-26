@@ -8,12 +8,11 @@ license they are allowed to redistribute under.
 from __future__ import annotations
 
 import json
-import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import consts, naming, verify
+from . import atomic, consts, naming, verify
 from .auth import Token
 from .errors import ManifestError
 from .sources.base import Record, Result
@@ -67,7 +66,11 @@ def write(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", "utf-8")
-    os.replace(tmp, path)
+    try:
+        atomic.replace(tmp, path)
+    except OSError:
+        atomic.unlink(tmp)  # no stray .tmp behind
+        raise
 
 
 def load(path: Path) -> dict:
@@ -76,7 +79,7 @@ def load(path: Path) -> dict:
     if path.is_dir():
         raise ManifestError(f"{path} is a directory, not a manifest")
     try:
-        raw = path.read_text("utf-8")
+        raw = atomic.read_text(path)
     except FileNotFoundError as exc:
         raise ManifestError(f"no such manifest: {path}") from exc
     except UnicodeDecodeError as exc:

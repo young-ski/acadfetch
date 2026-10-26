@@ -302,3 +302,23 @@ def test_verify_flags_a_symlink_pointing_out(tmp_path, capsys):
     path = _manifest(tmp_path, [entry])
     assert cli.main(["verify", str(path)]) == 1
     assert "escaped" in capsys.readouterr().out
+
+
+def test_a_locked_manifest_is_one_line_not_a_crash(monkeypatch, capsys, tmp_path):
+    """Windows refuses os.replace while another handle holds the target."""
+    import acadfetch.manifest as mf
+
+    _stub_resolve(monkeypatch)
+    out = tmp_path / "data"
+    out.mkdir()
+    (out / "f").write_bytes(b"payload")
+
+    def locked(path, data):
+        raise PermissionError(13, "in use", str(path))
+
+    monkeypatch.setattr(mf, "write", locked)
+    code = cli.main(["fetch", "zenodo:1", "-o", str(out)])
+    err = capsys.readouterr().err
+    assert code == 2  # the bytes are fine, the manifest is not
+    assert "could not write the manifest" in err
+    assert "Traceback" not in err
