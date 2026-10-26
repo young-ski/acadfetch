@@ -91,11 +91,18 @@ def http_error(code: int, body: bytes, content_type: str, **extra) -> urllib.err
 
 @pytest.fixture
 def fast(monkeypatch):
-    """A client that never really sleeps, plus scripted responses."""
+    """A client that never really sleeps, plus scripted responses.
+
+    Scripted exceptions are built up front but not all get raised; an unraised
+    ``HTTPError`` is never closed by the code under test and warns at GC, so the
+    fixture holds them and closes what is left over.
+    """
     monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+    leftovers: list[urllib.error.HTTPError] = []
 
     def install(script):
         calls = []
+        leftovers.extend(step for step in script if isinstance(step, Exception))
 
         def fake(_req):
             calls.append(len(calls))
@@ -107,7 +114,9 @@ def fast(monkeypatch):
         monkeypatch.setattr(Client, "_open", staticmethod(fake))
         return calls
 
-    return install
+    yield install
+    for exc in leftovers:
+        exc.close()
 
 
 def test_block_page_is_retried_then_succeeds(fast):
