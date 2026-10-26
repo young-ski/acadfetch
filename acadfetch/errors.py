@@ -34,6 +34,13 @@ class VerifyError(AcFError):
     """Downloaded bytes do not match the checksum published by the source."""
 
 
+class ManifestError(AcFError, ValueError):
+    """The manifest is missing, unreadable, or not a manifest we understand.
+
+    Also a ``ValueError`` so callers that used to catch that keep working.
+    """
+
+
 class PartialError(AcFError):
     """One or more files failed while others succeeded."""
 

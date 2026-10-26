@@ -121,3 +121,100 @@ def test_fully_skipped_run_prints_no_empty_progress_frame(monkeypatch, capsys, t
     assert "skip f" in printed
     assert "0 file(s)" not in printed
     assert "1/1 file(s)" in printed
+
+
+# -- verify: it must work on its own example, and never traceback ----------
+
+
+def _manifest(tmp_path, files, schema=1):
+    import json
+
+    path = tmp_path / "data" / "manifest.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"schema": schema, "files": files}), "utf-8")
+    return path
+
+
+def _good_entry(tmp_path):
+    import hashlib
+
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "a.bin").write_bytes(b"payload")
+    return {"name": "a.bin", "sha256": hashlib.sha256(b"payload").hexdigest()}
+
+
+def test_verify_resolves_names_against_the_manifest_dir(tmp_path, capsys):
+    """The README shows `verify ./data/manifest.json` and expects it to work."""
+    import os
+
+    good = _good_entry(tmp_path)
+    _manifest(tmp_path, [good])
+    here = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        assert cli.main(["verify", "./data/manifest.json"]) == 0
+    finally:
+        os.chdir(here)
+    assert "ok a.bin" in capsys.readouterr().out
+
+
+def test_verify_missing_manifest_is_one_line(tmp_path, capsys):
+    assert cli.main(["verify", str(tmp_path / "nope.json")]) == 1
+    err = capsys.readouterr().err
+    assert "no such manifest" in err
+    assert "Traceback" not in err
+
+
+def test_verify_directory_is_one_line(tmp_path, capsys):
+    assert cli.main(["verify", str(tmp_path)]) == 1
+    err = capsys.readouterr().err
+    assert "is a directory" in err
+    assert "Traceback" not in err
+
+
+def test_verify_bad_json_is_one_line(tmp_path, capsys):
+    path = tmp_path / "m.json"
+    path.write_text("{not json", "utf-8")
+    assert cli.main(["verify", str(path)]) == 1
+    err = capsys.readouterr().err
+    assert "not valid JSON" in err
+    assert "Traceback" not in err
+
+
+def test_verify_non_object_json_is_one_line(tmp_path, capsys):
+    path = tmp_path / "m.json"
+    path.write_text("[1, 2]", "utf-8")
+    assert cli.main(["verify", str(path)]) == 1
+    assert "not a manifest object" in capsys.readouterr().err
+
+
+def test_verify_future_schema_is_one_line(tmp_path, capsys):
+    path = _manifest(tmp_path, [], schema=99)
+    assert cli.main(["verify", str(path)]) == 1
+    assert "unsupported manifest schema" in capsys.readouterr().err
+
+
+def test_verify_entry_without_a_name_is_malformed(tmp_path, capsys):
+    path = _manifest(tmp_path, [{"sha256": "0" * 64}])
+    assert cli.main(["verify", str(path)]) == 1
+    assert "malformed" in capsys.readouterr().out
+
+
+def test_verify_empty_manifest_says_so(tmp_path, capsys):
+    path = _manifest(tmp_path, [])
+    assert cli.main(["verify", str(path)]) == 1
+    assert "lists no files" in capsys.readouterr().err
+
+
+def test_verify_root_still_overrides(tmp_path, capsys):
+    good = _good_entry(tmp_path)
+    path = _manifest(tmp_path, [good])
+    assert cli.main(["verify", str(path), "--root", str(tmp_path / "data")]) == 0
+
+
+def test_verify_mismatch_exits_1(tmp_path, capsys):
+    good = _good_entry(tmp_path)
+    path = _manifest(tmp_path, [good])
+    (tmp_path / "data" / "a.bin").write_bytes(b"tampered")
+    assert cli.main(["verify", str(path)]) == 1
+    assert "MISMATCH" in capsys.readouterr().out

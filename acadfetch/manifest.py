@@ -14,6 +14,7 @@ from pathlib import Path
 
 from . import consts, naming, verify
 from .auth import Token
+from .errors import ManifestError
 from .sources.base import Record, Result
 
 SCHEMA = 1
@@ -68,9 +69,29 @@ def write(path: Path, data: dict) -> None:
 
 
 def load(path: Path) -> dict:
-    data = json.loads(path.read_text("utf-8"))
+    """Read and shape-check a manifest, raising :class:`ManifestError`."""
+    # Windows raises PermissionError for a directory, POSIX IsADirectoryError.
+    if path.is_dir():
+        raise ManifestError(f"{path} is a directory, not a manifest")
+    try:
+        raw = path.read_text("utf-8")
+    except FileNotFoundError as exc:
+        raise ManifestError(f"no such manifest: {path}") from exc
+    except UnicodeDecodeError as exc:
+        raise ManifestError(f"{path} is not UTF-8: {exc}") from exc
+    except OSError as exc:
+        raise ManifestError(f"cannot read {path}: {exc.strerror or exc}") from exc
+
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        raise ManifestError(f"{path} is not valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ManifestError(f"{path} is not a manifest object")
     if data.get("schema") != SCHEMA:
-        raise ValueError(f"unsupported manifest schema: {data.get('schema')!r}")
+        raise ManifestError(f"unsupported manifest schema in {path}: {data.get('schema')!r}")
+    if not isinstance(data.get("files"), list):
+        raise ManifestError(f"{path} has no files list")
     return data
 
 
@@ -79,11 +100,15 @@ def verify_manifest(path: Path, root: Path) -> list[dict]:
     data = load(path)
     rows = []
     for entry in data.get("files") or []:
-        target = root / entry["name"]
+        name = entry.get("name") if isinstance(entry, dict) else None
+        if not isinstance(name, str) or not name:
+            rows.append({"name": "(unnamed entry)", "status": "malformed"})
+            continue
+        target = root / name
         if not target.is_file():
-            rows.append({"name": entry["name"], "status": "missing"})
+            rows.append({"name": name, "status": "missing"})
             continue
         actual = verify.hash_file(target, "sha256")
         status = "ok" if actual == entry.get("sha256") else "MISMATCH"
-        rows.append({"name": entry["name"], "status": status, "sha256": actual})
+        rows.append({"name": name, "status": status, "sha256": actual})
     return rows

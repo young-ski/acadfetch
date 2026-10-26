@@ -170,14 +170,18 @@ def cmd_fetch(args: argparse.Namespace) -> int:
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
-    root = Path(args.root or ".")
-    rows = manifest.verify_manifest(Path(args.manifest), root)
-    bad = 0
+    manifest_path = Path(args.manifest)
+    # Names in a manifest are relative to the directory it was written into.
+    # Defaulting to the cwd made the README's own example fail.
+    root = Path(args.root) if args.root else manifest_path.parent
+    rows = manifest.verify_manifest(manifest_path, root)
+    bad = sum(1 for row in rows if row["status"] != "ok")
     for row in rows:
-        if row["status"] != "ok":
-            bad += 1
         print(f"{row['status']:>9} {row['name']}")
     print(f"\n{len(rows) - bad}/{len(rows)} ok")
+    if not rows:
+        print("the manifest lists no files", file=sys.stderr)
+        return EXIT_FAIL
     return EXIT_FAIL if bad else EXIT_OK
 
 
@@ -248,7 +252,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     ver = sub.add_parser("verify", help="re-check a local directory against its manifest")
     ver.add_argument("manifest")
-    ver.add_argument("--root", help="directory the manifest's names are relative to")
+    ver.add_argument(
+        "--root",
+        help="directory the manifest's names are relative to (default: the manifest's own directory)",
+    )
     ver.set_defaults(func=cmd_verify)
 
     src = sub.add_parser("sources", help="list supported sources")
