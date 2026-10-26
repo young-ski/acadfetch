@@ -1,5 +1,8 @@
 """arXiv adapter.
 
+Requests go over https and the API response is closed; arXiv happens to
+send ``Connection: close`` today, which is what hid a missing ``with`` here.
+
 arXiv serves PDFs through a redirecting URL and publishes no checksum, so
 files here are size-unknown and verified only by byte count.
 """
@@ -13,7 +16,7 @@ from ..client import Client
 from ..errors import SourceError
 from .base import File, Record
 
-API = "http://export.arxiv.org/api/query?id_list={id}"
+API = "https://export.arxiv.org/api/query?id_list={id}"
 
 _PATTERNS = [
     re.compile(r"^arxiv:(?P<id>[\w.\-/]+)$", re.I),
@@ -36,7 +39,8 @@ def resolve(client: Client, target: str) -> Record:
     if arxiv_id is None:
         raise SourceError(f"not an arXiv reference: {target}")
 
-    xml = client.open(API.format(id=arxiv_id)).read()
+    with client.open(API.format(id=arxiv_id)) as resp:
+        xml = resp.read()
     try:
         root = ET.fromstring(xml)
     except ET.ParseError as exc:
@@ -47,7 +51,6 @@ def resolve(client: Client, target: str) -> Record:
         raise SourceError(f"arXiv id {arxiv_id} not found")
 
     title = " ".join((entry.findtext("a:title", default="", namespaces=_NS)).split())
-    entry.findtext("a:published", default="", namespaces=_NS)
     abs_url = entry.findtext("a:id", default="", namespaces=_NS)
     if "api/errors" in abs_url:
         raise SourceError(f"arXiv id {arxiv_id} not found")
@@ -64,7 +67,3 @@ def resolve(client: Client, target: str) -> Record:
         version=arxiv_id[len(base_id) :].lstrip("v"),
         landing=abs_url.replace("http://", "https://") if abs_url else "",
     )
-
-
-def _published(entry: ET.Element) -> str:
-    return entry.findtext("a:published", default="", namespaces=_NS)

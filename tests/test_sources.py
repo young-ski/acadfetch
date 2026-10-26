@@ -246,3 +246,62 @@ def test_figshare_without_files_raises():
     payload["files"] = []
     with pytest.raises(SourceError, match="no downloadable files"):
         figshare_record(payload)
+
+
+# -- arXiv resolve (no fixture covered it before) -------------------------
+
+ATOM = b"""<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>https://arxiv.org/abs/2401.12345v2</id>
+    <title>Distributionally
+      Robust Receive Combining</title>
+  </entry>
+</feed>
+"""
+
+
+class OpenClient(FakeClient):
+    """A FakeClient that can also serve a body, and records that it was closed."""
+
+    def __init__(self, body: bytes):
+        super().__init__({})
+        self.body = body
+        self.closed = False
+        self.url = ""
+
+    def open(self, url, headers=None, attempts=None):
+        self.url = url
+        outer = self
+
+        class Resp:
+            def read(self, _n=None):
+                return outer.body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                outer.closed = True
+                return False
+
+        return Resp()
+
+
+def test_arxiv_resolve_maps_the_entry_and_closes_the_response():
+    client = OpenClient(ATOM)
+    record = arxiv.resolve(client, "arxiv:2401.12345v2")
+    assert record.source == "arxiv"
+    assert record.title == "Distributionally Robust Receive Combining"
+    assert record.version == "2"
+    assert record.files[0].url == "https://arxiv.org/pdf/2401.12345v2"
+    assert record.files[0].size is None
+    assert record.files[0].checksum is None
+    assert record.doi == "10.48550/arXiv.2401.12345"
+    assert client.closed is True
+
+
+def test_arxiv_asks_over_https():
+    client = OpenClient(ATOM)
+    arxiv.resolve(client, "arxiv:2401.12345")
+    assert client.url.startswith("https://export.arxiv.org/api/query")
