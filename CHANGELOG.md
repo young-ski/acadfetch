@@ -47,6 +47,7 @@ so it is all "Added" — the list doubles as an honest statement of scope.
 ### Known limits
 
 - Windows ARM and Python 3.15 are untested.
+- macOS is best effort: it runs in CI but does not block a release.
 - Tokens come from the environment only: no interactive login, no refresh.
 - No search or pagination — you bring the target.
 - figshare was verified end to end from a Japanese network only; the API's

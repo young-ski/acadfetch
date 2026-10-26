@@ -40,7 +40,7 @@ cite.
 
 ## Install
 
-Python 3.10+. No runtime dependencies.
+Python 3.10–3.14. No runtime dependencies.
 
 ```bash
 pipx install acadfetch
@@ -48,6 +48,16 @@ pipx install acadfetch
 pipx install git+https://github.com/young-ski/acadfetch
 python -m pip install -e .
 ```
+
+## Supported platforms
+
+| Platform | Status |
+| --- | --- |
+| Linux | tested — CI, every supported Python |
+| Windows | tested — CI, every supported Python |
+| macOS | best effort — CI runs it on 3.12 and 3.14, a failure is a bug to fix but does not hold a release |
+| Windows ARM | untested |
+| Python 3.15 | untested; install is not blocked on it |
 
 ## Usage
 
@@ -163,6 +173,9 @@ honest way to test this code path.
 - arXiv PDFs are fetched by constructed URL, so a withdrawn ID gives a 404 after
   resolution.
 - Windows ARM is untested.
+- macOS is best effort: it is in CI but not release-blocking, and nobody has
+  run it by hand yet.
+- Python 3.15 is untested.
 
 ## 中文
 
