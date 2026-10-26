@@ -322,3 +322,22 @@ def test_a_locked_manifest_is_one_line_not_a_crash(monkeypatch, capsys, tmp_path
     assert code == 2  # the bytes are fine, the manifest is not
     assert "could not write the manifest" in err
     assert "Traceback" not in err
+
+
+def test_interrupt_exits_130_and_still_writes_the_manifest(monkeypatch, capsys, tmp_path):
+    """A partial run must leave something to reason about, not just a bare 130."""
+    from acadfetch.sources.base import Result
+
+    _stub_resolve(monkeypatch)
+
+    def fake_fetch(record, opts, client, only=None):
+        opts.interrupted = True
+        return [Result(record.files[0], "failed", error="interrupted")]
+
+    monkeypatch.setattr(cli, "fetch_record", fake_fetch)
+    out = tmp_path / "d"
+    assert cli.main(["fetch", "zenodo:1", "-o", str(out)]) == 130
+    printed = capsys.readouterr()
+    assert "interrupted - partial files kept" in printed.err
+    assert "interrupted" in printed.out
+    assert (out / "manifest.json").exists()

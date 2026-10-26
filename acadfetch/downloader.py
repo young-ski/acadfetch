@@ -12,6 +12,7 @@ Resume is built on three ideas:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import random
 import threading
@@ -41,6 +42,23 @@ class Options:
     max_bytes: int | None = None
     progress: Progress | None = None
     verify_only: bool = False
+    #: Set by :func:`fetch_record` when a Ctrl-C cut the run short.
+    interrupted: bool = False
+
+
+# Live responses, so an interrupt can abort a read that is blocked on a socket
+# instead of waiting out the 60 s timeout for each one.
+_LIVE: set = set()
+_LIVE_LOCK = threading.Lock()
+_STOP = threading.Event()
+
+
+def _abort_open_transfers() -> None:
+    with _LIVE_LOCK:
+        live = list(_LIVE)
+    for resp in live:
+        with contextlib.suppress(Exception):  # noqa: BLE001 - closing is best effort
+            resp.close()
 
 
 def _read_meta(path: Path) -> dict:
@@ -81,6 +99,40 @@ def _range_start(value: str | None) -> int | None:
         return int(start.strip())
     except ValueError:
         return None
+
+
+def _socket_of(resp) -> object | None:  # noqa: ANN001
+    """The socket under a urllib response, if we can reach it."""
+    raw = getattr(getattr(resp, "fp", None), "raw", None)
+    return getattr(raw, "_sock", None)
+
+
+def _chunks(resp, idle_timeout: float, url: str):  # noqa: ANN001, ANN202
+    """Yield body chunks, polling so an interrupt lands quickly.
+
+    ``read1`` never waits for a full buffer, so a timeout costs no bytes; it is
+    only present on buffered readers, so plain ``read`` stays as a fallback.
+    """
+    reader = getattr(resp, "read1", None) or resp.read
+    sock = _socket_of(resp)
+    poll = 1.0 if idle_timeout > 1.0 else idle_timeout
+    if sock is not None:
+        with contextlib.suppress(OSError):
+            sock.settimeout(poll)
+    deadline = time.monotonic() + idle_timeout
+    while True:
+        if _STOP.is_set():
+            raise HttpError(0, url, "interrupted")
+        try:
+            chunk = reader(CHUNK)
+        except TimeoutError:
+            if time.monotonic() > deadline:
+                raise
+            continue
+        if not chunk:
+            return
+        deadline = time.monotonic() + idle_timeout
+        yield chunk
 
 
 def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Options) -> int:
@@ -149,17 +201,27 @@ def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Opt
                     f"Content-Length {declared} disagrees with the published size "
                     f"({expected} bytes still expected)",
                 )
-        with part.open(mode) as fh:
-            while True:
-                chunk = resp.read(CHUNK)
-                if not chunk:
-                    break
-                fh.write(chunk)
-                written += len(chunk)
-                if opts.progress:
-                    opts.progress.advance(len(chunk))
-                if opts.max_bytes and offset + written > opts.max_bytes:
-                    raise HttpError(0, file.url, f"exceeds --max-size ({human(opts.max_bytes)})")
+        # Reads poll with a short socket timeout so an interrupt is noticed
+        # within a second instead of after the whole 60 s socket timeout, and
+        # so an idle connection fails on its own budget. Closing the response
+        # from another thread additionally kicks a read that is already
+        # blocked.
+        with _LIVE_LOCK:
+            _LIVE.add(resp)
+        try:
+            with part.open(mode) as fh:
+                for chunk in _chunks(resp, client.timeout, file.url):
+                    fh.write(chunk)
+                    written += len(chunk)
+                    if opts.progress:
+                        opts.progress.advance(len(chunk))
+                    if opts.max_bytes and offset + written > opts.max_bytes:
+                        raise HttpError(
+                            0, file.url, f"exceeds --max-size ({human(opts.max_bytes)})"
+                        )
+        finally:
+            with _LIVE_LOCK:
+                _LIVE.discard(resp)
         if declared is not None and declared != written:
             raise HttpError(0, file.url, f"read {written} bytes, response declared {declared}")
     if resumed:
@@ -236,8 +298,11 @@ def _attempt(
                     blocked += 1
                 elif exc.status in (401, 403, 404, 410):
                     break  # terminal for this URL; a fallback may still work
-            except (OSError, ConnectionError) as exc:
+            except (OSError, ConnectionError, ValueError) as exc:
+                # ValueError: the response was closed under us by an interrupt.
                 last = exc
+            if _STOP.is_set():
+                return Result(file=file, state="failed", error="interrupted")
             if attempt < opts.retries:
                 time.sleep(min(2**attempt, 10) * (0.7 + random.random() * 0.6))
                 resumed_from = part.stat().st_size if part.exists() else 0
@@ -288,6 +353,21 @@ def _attempt(
 def fetch_record(
     record: Record, opts: Options, client: Client, only: list[str] | None = None
 ) -> list[Result]:
+    """Fetch every file of ``record``, surviving a Ctrl-C.
+
+    The stop flag is process-wide, so it is cleared on the way out as well as in:
+    a later run in the same process must not start out believing it is halted.
+    """
+    _STOP.clear()
+    try:
+        return _fetch_record(record, opts, client, only)
+    finally:
+        _STOP.clear()
+
+
+def _fetch_record(
+    record: Record, opts: Options, client: Client, only: list[str] | None = None
+) -> list[Result]:
     opts.out.mkdir(parents=True, exist_ok=True)
     files = record.files
     if only:
@@ -306,22 +386,51 @@ def fetch_record(
     taken: set[str] = set()
     lock = threading.Lock()
     results: list[Result] = []
+    opts.interrupted = False
 
     if opts.concurrency <= 1:
         for file in files:
-            results.append(fetch_file(client, file, opts, taken))
-        return results
+            try:
+                results.append(fetch_file(client, file, opts, taken))
+            except KeyboardInterrupt:
+                opts.interrupted = True
+                _STOP.set()
+                results.append(Result(file=file, state="failed", error="interrupted"))
+                break
+        return _in_record_order(results, record)
 
-    with ThreadPoolExecutor(max_workers=opts.concurrency) as pool:
-        futures = {}
+    pool = ThreadPoolExecutor(max_workers=opts.concurrency)
+    futures = {}
+    try:
         for file in files:
             with lock:
                 futures[pool.submit(fetch_file, client, file, opts, taken)] = file
         for future in as_completed(futures):
             results.append(future.result())
+    except KeyboardInterrupt:
+        # Abort the reads that are blocked, then let the workers unwind: they
+        # see the stop flag and keep their .part instead of retrying.
+        opts.interrupted = True
+        _STOP.set()
+        _abort_open_transfers()
+        pool.shutdown(wait=True, cancel_futures=True)
+        for future, file in futures.items():
+            if future.cancelled() or not future.done():
+                continue
+            try:
+                results.append(future.result())
+            except KeyboardInterrupt:
+                results.append(Result(file=file, state="failed", error="interrupted"))
+            except Exception:  # noqa: BLE001 - one bad worker must not hide the rest
+                pass
+    else:
+        pool.shutdown(wait=True)
+    return _in_record_order(results, record)
+
+
+def _in_record_order(results: list[Result], record: Record) -> list[Result]:
     order = {id(f): i for i, f in enumerate(record.files)}
-    results.sort(key=lambda r: order.get(id(r.file), 0))
-    return results
+    return sorted(results, key=lambda r: order.get(id(r.file), 0))
 
 
 def _enforce_total(record: Record, limit: int) -> None:

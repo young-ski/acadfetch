@@ -50,6 +50,14 @@ class Handler(BaseHTTPRequestHandler):
             cfg["blocked"][path] -= 1
             self._refuse(BLOCK, "text/html")
             return
+        if path == "/stall":
+            self.send_response(200)
+            self.send_header("Content-Length", str(10_000))
+            self.end_headers()
+            self.wfile.write(b"z" * 100)
+            self.wfile.flush()
+            __import__("time").sleep(3)
+            return
         if path not in cfg["files"]:
             self.send_error(404)
             return
@@ -461,3 +469,75 @@ def test_max_size_failure_drops_the_part(server, tmp_path):
     )
     assert res.state == "failed"
     assert not (tmp_path / "a.bin.part").exists()
+
+
+# -- interrupts: stop promptly, keep the .part, say so --------------------
+
+
+def _record_with(tmp_path, count=2):
+    return Record(
+        source="direct",
+        target="t",
+        files=[File(f"http://example.invalid/{i}.bin", f"{i}.bin", 100) for i in range(count)],
+    )
+
+
+def test_interrupt_is_reported_and_the_part_survives(tmp_path, monkeypatch):
+    def interrupting(client, file, part, meta_path, opts):
+        part.write_bytes(b"half")
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(downloader, "_transfer", interrupting)
+    o = downloader.Options(out=tmp_path, concurrency=1)
+    results = downloader.fetch_record(_record_with(tmp_path), o, Client(rate=1000))
+    assert o.interrupted is True
+    assert [r.error for r in results] == ["interrupted"]
+    assert (tmp_path / "0.bin.part").exists()
+
+
+def test_a_stop_skips_remaining_retries(tmp_path, monkeypatch):
+    calls = []
+
+    def failing(client, file, part, meta_path, opts):
+        calls.append(1)
+        downloader._STOP.set()  # what the interrupt handler does
+        raise OSError("socket went away")
+
+    monkeypatch.setattr(downloader, "_transfer", failing)
+    o = downloader.Options(out=tmp_path, concurrency=1, retries=5)
+    res = downloader.fetch_record(_record_with(tmp_path, 1), o, Client(rate=1000))
+    assert res[0].error == "interrupted"
+    assert len(calls) == 1  # no sleeping through the rest of the budget
+
+
+def test_concurrent_interrupt_keeps_completed_results(tmp_path, monkeypatch):
+    done = []
+
+    def ok(client, file, part, meta_path, opts):
+        done.append(file.name)
+        part.write_bytes(b"x" * (file.size or 0))
+
+    monkeypatch.setattr(downloader, "_transfer", ok)
+    real = downloader.as_completed
+
+    def one_then_interrupt(futures):
+        first = next(iter(futures))
+        yield first
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(downloader, "as_completed", one_then_interrupt)
+    o = downloader.Options(out=tmp_path, concurrency=2)
+    results = downloader.fetch_record(_record_with(tmp_path, 3), o, Client(rate=1000))
+    monkeypatch.setattr(downloader, "as_completed", real)
+    assert o.interrupted is True
+    assert results  # whatever finished is still reported
+    assert len(done) >= 1
+
+
+def test_a_stalled_body_hits_the_idle_budget(server, tmp_path):
+    """A silent socket must fail on its own timer, not hang until the OS gives up."""
+    f = File(server.base + "/stall", "a.bin", None, None)
+    client = Client(rate=1000, retries=0, timeout=0.3)
+    res = downloader.fetch_file(client, f, opts(tmp_path, retries=0), set())
+    assert res.state == "failed"
+    assert "timed out" in res.error.lower()

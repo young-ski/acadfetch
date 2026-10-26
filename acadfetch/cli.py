@@ -142,9 +142,6 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     except PartialError:
         print(f"no file matched --only {args.only}", file=sys.stderr)
         return EXIT_FAIL
-    except KeyboardInterrupt:
-        progress.finish()
-        raise
     finally:
         progress.finish()
 
@@ -168,6 +165,8 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         # outcome, not a crash.
         print(f"acadfetch: could not write the manifest: {exc}", file=sys.stderr)
         print(f"{len(results) - len(failures)}/{len(results)} file(s) in {out_dir}")
+        if opts.interrupted:
+            return EXIT_INTERRUPT
         return EXIT_PARTIAL if len(results) > len(failures) else EXIT_FAIL
     print(f"\n{len(results) - len(failures)}/{len(results)} file(s) in {out_dir}")
     if args.manifest_out:
@@ -177,8 +176,13 @@ def cmd_fetch(args: argparse.Namespace) -> int:
             print(f"acadfetch: could not write {args.manifest_out}: {exc}", file=sys.stderr)
             return EXIT_PARTIAL
 
-    if failures and len(failures) == len(results):
+    if failures and len(failures) == len(results) and not opts.interrupted:
         return EXIT_FAIL
+    if opts.interrupted:
+        # The manifest above covers whatever finished, which is the difference
+        # between "a partial run you can reason about" and a bare exit 130.
+        print("interrupted - partial files kept, rerun to resume", file=sys.stderr)
+        return EXIT_INTERRUPT
     return EXIT_PARTIAL if failures else EXIT_OK
 
 
