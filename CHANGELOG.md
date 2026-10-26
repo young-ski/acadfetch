@@ -6,6 +6,35 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
+### Fixed
+
+- `verify` resolved names against the working directory instead of the
+  manifest's own, so the command in this README failed on healthy data.
+- `verify` dumped a traceback for a missing file, a directory, invalid JSON or a
+  future schema; it now prints one line and exits 1, and reports an entry with
+  no name as `malformed`.
+- A malformed `Content-Length` (e.g. `12, 12`) escaped as a `ValueError`; a body
+  shorter than the declared length was kept; a declared length disagreeing with
+  the published size was ignored. All three are failures now.
+- A `206` from an offset other than the one requested was appended to the
+  partial file, splicing two offsets. `Content-Range` decides, and an ambiguous
+  answer restarts instead of guessing.
+- Retry budgets multiplied (client retries × transfer retries): a permanent 500
+  cost 25 requests, and `--retries` never reached the transfer layer. One budget
+  now owns it — 5 requests at defaults, 1 at `--retries 0` — and advisory `HEAD`
+  calls stop retrying.
+- `Retry-After: 0` meant no gap at all; there is a small jittered floor now.
+- A `--max-size` trip left the over-limit `.part` behind for the next run.
+
+### Added
+
+- `tests/test_packaging.py`: non-stdlib import sweep, no declared dependencies,
+  and `version` matching `consts.__version__`.
+- CI: coverage floor, deprecation warnings as errors, job timeouts, `twine
+  check`, wheel/sdist content assertions, and a `--no-deps` install.
+- `SECURITY.md`, a bug template, a PR template with the invariants as a
+  checklist, `CODEOWNERS`, a first-PR path in `CONTRIBUTING.md`.
+
 ## [0.1.0] - 2026-10-25
 
 First release. Nothing here has a previous behaviour to be compatible with,

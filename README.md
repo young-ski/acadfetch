@@ -183,6 +183,10 @@ honest way to test this code path.
 - macOS is best effort: it is in CI but not release-blocking, and nobody has
   run it by hand yet.
 - Python 3.15 is untested.
+- A source that publishes neither a size nor a checksum (bare `direct` URLs
+  without a `Content-Length` on `HEAD`) can still be truncated silently by a
+  server that lies about `Content-Length`, because HTTP gives no in-band way to
+  notice the extra bytes.
 
 ## 中文
 
