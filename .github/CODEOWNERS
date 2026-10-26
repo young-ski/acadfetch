@@ -1,0 +1,3 @@
+# Single maintainer; the point is that review cannot be forgotten, and that
+# CODEOWNERS gives a name for branch protection to require later.
+* @young-ski

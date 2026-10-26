@@ -165,6 +165,13 @@ bandwidth; `unknown` means *check before redistributing*.
 `scripts/probe_resume.py` interrupts a live transfer and resumes it — the only
 honest way to test this code path.
 
+## Getting involved
+
+- **Usage questions** → [Discussions](https://github.com/young-ski/acadfetch/discussions)
+- **Bugs** → the bug template; say whether `verify` reports `MISMATCH`
+- **Security** (bad bytes, path escapes, token leaks) → [`SECURITY.md`](SECURITY.md), privately
+- **Adapters, tests, docs** → PRs welcome, read [`CONTRIBUTING.md`](CONTRIBUTING.md) first
+
 ## Known limits
 
 - Tokens come from the environment only; no interactive `login` flow and no

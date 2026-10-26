@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/young-ski/acadfetch/security/advisories/new
+    about: Private disclosure for path escapes, corrupt "complete" files, token leaks
+  - name: Question or usage help
+    url: https://github.com/young-ski/acadfetch/discussions
+    about: Usage questions go here rather than in the issue tracker
