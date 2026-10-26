@@ -55,6 +55,6 @@ def resolve(client: Client, target: str, allow_doi: bool = True) -> Record:
         return _dispatch(zenodo, client, f"zenodo:{text}")
 
     raise TargetError(
-        f"cannot tell what {text!r} is; try a DOI, a zenodo/figshare/arxiv id, or a URL.\n"
-        f"known sources: {', '.join(names())}"
+        f"cannot tell what {text!r} is; try a DOI, a zenodo/figshare/arxiv id, or a URL "
+        f"(known sources: {', '.join(names())})"
     )
