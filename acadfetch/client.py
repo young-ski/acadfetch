@@ -44,12 +44,14 @@ def is_block_page(detail: str, content_type: str | None) -> bool:
     return not head or head == "<"
 
 
-def _blocked_detail(detail: str, retries: int) -> str:
+def _blocked_detail(detail: str, retries: int | None) -> str:
     """Block-page markup is noise in a one-line error; name it instead."""
-    gave_up = f"gave up after {retries} retr{'y' if retries == 1 else 'ies'}"
+    named = "WAF block page"
+    if retries is not None:
+        named += f", gave up after {retries} retr{'y' if retries == 1 else 'ies'}"
     if detail.startswith("<"):
-        return f"WAF block page, {gave_up}"
-    return f"{detail} (WAF block page, {gave_up})"
+        return named
+    return f"{detail} ({named})"
 
 
 def parse_retry_after(value: str | None) -> float | None:
@@ -98,7 +100,9 @@ class Client:
     # -- internals ---------------------------------------------------------
     def _sleep(self, attempt: int, retry_after: float | None) -> None:
         if retry_after is not None:
-            time.sleep(retry_after)
+            # A literal `Retry-After: 0` would mean no gap at all and a burst;
+            # keep a small jittered floor under it.
+            time.sleep(max(retry_after, 0.05 + random.random() * 0.15))
             return
         backoff = min(0.8 * (2**attempt), 30.0)
         time.sleep(backoff * (0.7 + random.random() * 0.6))
@@ -119,14 +123,22 @@ class Client:
     def _open(self, req: urllib.request.Request):  # noqa: ANN202
         return urllib.request.urlopen(req, timeout=self.timeout)
 
-    def _with_retries(self, url: str, fn, headers=None, block_retries: int | None = None):  # noqa: ANN001, ANN202
+    def _with_retries(
+        self,
+        url: str,
+        fn,
+        headers=None,
+        block_retries: int | None = None,
+        attempts: int | None = None,
+    ):  # noqa: ANN001, ANN202
         if block_retries is None:
             block_retries = self.block_retries
+        budget = self.retries + 1 if attempts is None else max(1, attempts)
         last: Exception | None = None
         last_detail = ""
         last_blocked = False
         waf = 0
-        for attempt in range(self.retries + 1):
+        for attempt in range(budget):
             self.bucket.acquire()
             retry_after = None
             try:
@@ -146,7 +158,10 @@ class Client:
                     raise HttpError(exc.code, url, detail) from exc
                 elif waf >= block_retries:
                     raise HttpError(
-                        403, url, _blocked_detail(last_detail, block_retries), transient=True
+                        403,
+                        url,
+                        _blocked_detail(last_detail, waf if budget > 1 else None),
+                        transient=True,
                     ) from exc
                 else:
                     waf += 1
@@ -154,17 +169,25 @@ class Client:
                 last = exc
                 last_detail = str(exc)
                 last_blocked = False
-            if attempt < self.retries:
+            if attempt < budget - 1:
                 self._sleep(attempt, retry_after)
         if isinstance(last, urllib.error.HTTPError):
-            detail = _blocked_detail(last_detail, waf) if last_blocked else last_detail
+            detail = (
+                _blocked_detail(last_detail, waf if budget > 1 else None)
+                if last_blocked
+                else last_detail
+            )
             raise HttpError(last.code, url, detail, transient=True) from last
         raise HttpError(0, url, last_detail or str(last)) from last
 
     # -- public ------------------------------------------------------------
-    def open(self, url: str, headers: Mapping[str, str] | None = None):
-        """Open a stream. Caller must close it."""
-        return self._with_retries(url, self._open, headers)
+    def open(self, url: str, headers: Mapping[str, str] | None = None, attempts: int | None = None):
+        """Open a stream. Caller must close it.
+
+        ``attempts`` overrides the retry budget, for callers that manage their
+        own (the transfer engine does, because it owns the resume state).
+        """
+        return self._with_retries(url, self._open, headers, attempts=attempts)
 
     def get_json(self, url: str, headers: Mapping[str, str] | None = None) -> dict:
         with self.open(url, headers) as resp:
@@ -180,7 +203,8 @@ class Client:
             return self._open(req)
 
         try:
-            with self._with_retries(url, _head, block_retries=0) as resp:
+            # HEAD only feeds size/filename; one shot, never worth a retry.
+            with self._with_retries(url, _head, block_retries=0, attempts=1) as resp:
                 return dict(resp.headers)
         except HttpError as exc:
             if exc.status in (403, 405, 501):

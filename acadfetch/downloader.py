@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -63,6 +64,28 @@ def _drop(*paths: Path) -> None:
             path.unlink()
 
 
+def _content_length(headers, url: str) -> int | None:
+    raw = headers.get("Content-Length")
+    if raw is None:
+        return None
+    try:
+        return int(raw.strip())
+    except (AttributeError, ValueError):
+        raise HttpError(0, url, f"unparseable Content-Length: {raw!r}") from None
+
+
+def _range_start(value: str | None) -> int | None:
+    """First byte offset of a ``Content-Range: bytes a-b/n`` header."""
+    if not value:
+        return None
+    head, _, _ = value.strip().partition("-")
+    _, _, start = head.partition("bytes")
+    try:
+        return int(start.strip())
+    except ValueError:
+        return None
+
+
 def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Options) -> int:
     """Move bytes into ``part``, resuming if possible. Returns bytes written."""
     meta = _read_meta(meta_path) if part.exists() else {}
@@ -84,8 +107,10 @@ def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Opt
 
     written = 0
     resumed = 0
+    # One attempt here: the caller owns the retry budget for bytes, because it
+    # is the one that knows about resume points and fallback URLs.
     try:
-        resp = client.open(file.url, headers)
+        resp = client.open(file.url, headers, attempts=1)
     except HttpError as exc:
         if exc.status == 416 and have:
             return 0  # already complete
@@ -93,10 +118,22 @@ def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Opt
 
     with resp:
         status = getattr(resp, "status", 200)
+        declared = _content_length(resp.headers, file.url)
+        whole = True
         if have and status == 206:
-            mode, offset, resumed = "ab", have, have
-        else:
+            # Decide whether this body is the remaining bytes or the whole file
+            # again. Content-Range is authoritative; without it the declared
+            # length tells us (a full-size body means the range was ignored);
+            # with neither, restart rather than splice blindly.
+            start = _range_start(resp.headers.get("Content-Range"))
+            if start is not None:
+                whole = start != have
+            else:
+                whole = declared is None or file.size is None or declared != file.size - have
+        if whole:
             mode, offset = "wb", 0
+        else:
+            mode, offset, resumed = "ab", have, have
         _write_meta(
             meta_path,
             {
@@ -106,7 +143,15 @@ def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Opt
                 "size": file.size,
             },
         )
-        declared = resp.headers.get("Content-Length")
+        if declared is not None and file.size is not None:
+            expected = file.size - offset
+            if declared != expected:
+                raise HttpError(
+                    0,
+                    file.url,
+                    f"Content-Length {declared} disagrees with the published size "
+                    f"({expected} bytes still expected)",
+                )
         with part.open(mode) as fh:
             while True:
                 chunk = resp.read(CHUNK)
@@ -118,8 +163,8 @@ def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Opt
                     opts.progress.advance(len(chunk))
                 if opts.max_bytes and offset + written > opts.max_bytes:
                     raise HttpError(0, file.url, f"exceeds --max-size ({human(opts.max_bytes)})")
-        if declared is not None and int(declared) != written:
-            raise HttpError(0, file.url, f"short read: got {written}, expected {declared}")
+        if declared is not None and declared != written:
+            raise HttpError(0, file.url, f"read {written} bytes, response declared {declared}")
     if resumed:
         return written
     return written
@@ -186,6 +231,9 @@ def _attempt(
             except HttpError as exc:
                 last = exc
                 if exc.status == 0 and "exceeds --max-size" in str(exc):
+                    # Do not leave an over-limit part for the next run to
+                    # resume straight back into the same wall.
+                    _drop(part, meta_path)
                     return Result(file=file, state="failed", error=str(exc))
                 if exc.status == 403 and exc.transient and blocked < client.block_retries:
                     blocked += 1
@@ -194,7 +242,7 @@ def _attempt(
             except (OSError, ConnectionError) as exc:
                 last = exc
             if attempt < opts.retries:
-                time.sleep(min(2**attempt, 10))
+                time.sleep(min(2**attempt, 10) * (0.7 + random.random() * 0.6))
                 resumed_from = part.stat().st_size if part.exists() else 0
         if done:
             break

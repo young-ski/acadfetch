@@ -218,3 +218,17 @@ def test_verify_mismatch_exits_1(tmp_path, capsys):
     (tmp_path / "data" / "a.bin").write_bytes(b"tampered")
     assert cli.main(["verify", str(path)]) == 1
     assert "MISMATCH" in capsys.readouterr().out
+
+
+def test_retries_flag_reaches_the_transfer_layer(monkeypatch, capsys):
+    """`--retries` must not stop at the Client; the transfer loop owns the budget."""
+    _stub_resolve(monkeypatch)
+    seen = {}
+
+    def fake_fetch(record, opts, client, only=None):
+        seen["retries"] = opts.retries
+        return []
+
+    monkeypatch.setattr(cli, "fetch_record", fake_fetch)
+    assert cli.main(["fetch", "zenodo:1", "-o", ".tmp/x", "--retries", "0"]) == 0
+    assert seen["retries"] == 0

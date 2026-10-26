@@ -126,6 +126,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     opts = Options(
         out=out_dir,
         concurrency=args.concurrency,
+        retries=args.retries,
         dry_run=args.dry_run,
         max_bytes=args.max_size,
         progress=progress,

@@ -41,6 +41,11 @@ class Handler(BaseHTTPRequestHandler):
         if path in cfg["forbidden"]:
             self._refuse(FORBIDDEN, "application/json")
             return
+        if path in cfg["always_500"]:
+            self.send_response(500)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if cfg["blocked"].get(path, 0) > 0:
             cfg["blocked"][path] -= 1
             self._refuse(BLOCK, "text/html")
@@ -57,15 +62,29 @@ class Handler(BaseHTTPRequestHandler):
             if if_range is None or if_range == cfg["etag"]:
                 start = int(wanted.split("=")[1].split("-")[0])
 
-        body = payload[start:]
-        self.send_response(206 if start else 200)
+        if path in cfg["lies_about_range"]:
+            # Answers 206 with the whole body and a Content-Range from zero,
+            # which is what a server ignoring If-Range looks like.
+            body = payload
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes 0-{len(payload) - 1}/{len(payload)}")
+        else:
+            body = payload[start:]
+            self.send_response(206 if start else 200)
+            if start:
+                self.send_header(
+                    "Content-Range", f"bytes {start}-{len(payload) - 1}/{len(payload)}"
+                )
         self.send_header("Content-Type", "application/octet-stream")
-        self.send_header("Content-Length", str(len(body)))
+        declared = cfg["declares"].get(path, len(body))
+        self.send_header("Content-Length", str(declared))
         self.send_header("ETag", cfg["etag"])
         self.end_headers()
         limit = cfg.get("truncate_at")
         if limit is not None and cfg["hits"][path] <= cfg.get("truncate_times", 1):
             body = body[:limit]
+        if declared > len(body):  # declared a length it does not deliver
+            body = body + b"\0" * 0
         self.wfile.write(body)
         self.wfile.flush()
 
@@ -81,6 +100,9 @@ def server():
         "truncate_at": None,
         "blocked": {},
         "forbidden": set(),
+        "always_500": set(),
+        "lies_about_range": set(),
+        "declares": {},
     }
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
@@ -91,7 +113,8 @@ def server():
 
 
 def opts(tmp_path: Path, **kw) -> downloader.Options:
-    return downloader.Options(out=tmp_path, concurrency=1, retries=2, **kw)
+    kw.setdefault("retries", 2)
+    return downloader.Options(out=tmp_path, concurrency=1, **kw)
 
 
 def make_file(server, path="/a.bin", payload=b"hello world" * 100, **kw):
@@ -380,3 +403,61 @@ def test_one_flipped_byte_against_the_real_md5_fails(server, tmp_path):
     assert res.state == "failed"
     assert "mismatch" in res.error
     assert not (tmp_path / REAL_NAME).exists()
+
+
+# -- integrity: lying headers, bad offsets, bounded retries ----------------
+
+
+def test_malformed_content_length_is_a_failure_not_a_crash(server, tmp_path):
+    f = make_file(server, payload=b"hello world", size=None)
+    server.cfg["declares"]["/a.bin"] = "12, 12"
+    res = downloader.fetch_file(Client(rate=1000, retries=1), f, opts(tmp_path), set())
+    assert res.state == "failed"
+    assert "Content-Length" in res.error
+
+
+def test_content_length_disagreeing_with_the_published_size_fails(server, tmp_path):
+    payload = b"y" * 500
+    f = make_file(server, payload=payload)
+    server.cfg["declares"]["/a.bin"] = 10
+    res = downloader.fetch_file(Client(rate=1000, retries=1), f, opts(tmp_path), set())
+    assert res.state == "failed"
+    assert "disagrees with the published size" in res.error
+
+
+def test_a_206_from_the_wrong_offset_restarts_instead_of_splicing(server, tmp_path):
+    payload = b"0123456789" * 40
+    f = make_file(server, payload=payload, checksum="sha256:" + hashlib.sha256(payload).hexdigest())
+    (tmp_path / "a.bin.part").write_bytes(payload[:100])
+    (tmp_path / "a.bin.part.meta.json").write_text(
+        f'{{"url": "{f.url}", "etag": "\\"v1\\""}}', "utf-8"
+    )
+    server.cfg["lies_about_range"].add("/a.bin")
+    res = downloader.fetch_file(Client(rate=1000, retries=1), f, opts(tmp_path), set())
+    assert res.state == "downloaded"
+    assert (tmp_path / "a.bin").read_bytes() == payload
+
+
+def test_retries_zero_means_one_attempt(server, tmp_path):
+    f = make_file(server, payload=b"z" * 100, checksum=None)
+    server.cfg["always_500"].add("/a.bin")
+    res = downloader.fetch_file(Client(rate=1000, retries=9), f, opts(tmp_path, retries=0), set())
+    assert res.state == "failed"
+    assert server.cfg["hits"]["/a.bin"] == 1
+
+
+def test_a_permanent_500_costs_one_attempt_per_retry_not_a_square(server, tmp_path):
+    """The budget belongs to the transfer layer; the client must not multiply it."""
+    f = make_file(server, payload=b"z" * 100, checksum=None)
+    server.cfg["always_500"].add("/a.bin")
+    downloader.fetch_file(Client(rate=1000, retries=9), f, opts(tmp_path, retries=4), set())
+    assert server.cfg["hits"]["/a.bin"] == 5
+
+
+def test_max_size_failure_drops_the_part(server, tmp_path):
+    f = make_file(server, payload=b"z" * 5000, size=None)
+    res = downloader.fetch_file(
+        Client(rate=1000, retries=1), f, opts(tmp_path, max_bytes=1000), set()
+    )
+    assert res.state == "failed"
+    assert not (tmp_path / "a.bin.part").exists()

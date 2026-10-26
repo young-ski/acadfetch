@@ -84,8 +84,8 @@ class Resp:
         return False
 
 
-def http_error(code: int, body: bytes, content_type: str) -> urllib.error.HTTPError:
-    headers = {"Content-Type": content_type}
+def http_error(code: int, body: bytes, content_type: str, **extra) -> urllib.error.HTTPError:
+    headers = {"Content-Type": content_type, **extra}
     return urllib.error.HTTPError(URL, code, "boom", headers, io.BytesIO(body))
 
 
@@ -171,3 +171,32 @@ def test_block_retries_can_be_raised(fast):
 
 def test_negative_block_retries_is_clamped():
     assert Client(rate=1000, block_retries=-3).block_retries == 0
+
+
+def test_head_does_not_spend_retries_on_a_500(fast):
+    calls = fast([http_error(500, b"", "text/plain") for _ in range(9)])
+    with pytest.raises(HttpError):
+        Client(rate=1000, retries=4).head(URL)
+    assert len(calls) == 1
+
+
+def test_retry_after_zero_still_leaves_a_gap(monkeypatch):
+    slept: list[float] = []
+    monkeypatch.setattr(client_mod.time, "sleep", slept.append)
+    script = [
+        http_error(429, b"", "text/plain", **{"Retry-After": "0"}),
+        http_error(429, b"", "text/plain", **{"Retry-After": "0"}),
+        b"ok",
+    ]
+
+    def fake(_req):
+        step = script.pop(0)
+        if isinstance(step, Exception):
+            raise step
+        return Resp(step)
+
+    monkeypatch.setattr(Client, "_open", staticmethod(fake))
+    with Client(rate=1000, retries=4).open(URL) as resp:
+        assert resp.read() == b"ok"
+    assert len(slept) == 2
+    assert min(slept) >= 0.05
