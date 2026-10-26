@@ -40,7 +40,7 @@ cite.
 
 ## Install
 
-Python 3.10–3.14. No runtime dependencies.
+Python 3.10–3.15. No runtime dependencies.
 
 ```bash
 pipx install acadfetch
@@ -57,7 +57,7 @@ python -m pip install -e .
 | Windows | tested — CI, every supported Python |
 | macOS | best effort — CI runs it on 3.12 and 3.14, a failure is a bug to fix but does not hold a release |
 | Windows ARM | untested |
-| Python 3.15 | untested; install is not blocked on it |
+| Python 3.15 | tested — CI, on Linux and Windows |
 
 ## Usage
 
@@ -188,7 +188,6 @@ honest way to test this code path.
 - Windows ARM is untested.
 - macOS is best effort: it is in CI but not release-blocking, and nobody has
   run it by hand yet.
-- Python 3.15 is untested.
 - A source that publishes neither a size nor a checksum (bare `direct` URLs
   without a `Content-Length` on `HEAD`) can still be truncated silently by a
   server that lies about `Content-Length`, because HTTP gives no in-band way to

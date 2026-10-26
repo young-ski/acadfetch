@@ -23,13 +23,16 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
         include:
           - os: macos-latest
             python: "3.12"
             optional: true
           - os: macos-latest
             python: "3.14"
+            optional: true
+          - os: macos-latest
+            python: "3.15"
             optional: true
     steps:
       - uses: actions/checkout@v4
@@ -45,7 +48,9 @@ jobs:
         # The floor stops a PR from gutting a test body and staying green.
         run: pytest -q --cov=acadfetch --cov-fail-under=85
       - name: Warnings are errors where they can be
-        run: python -X dev -W error::DeprecationWarning -m pytest -q
+        # -W error, not error::ResourceWarning: pytest re-emits unraisable
+        # warnings under its own category, so the narrow filter does not fail.
+        run: python -X dev -W error -m pytest -q
 
   build:
     runs-on: ubuntu-latest
