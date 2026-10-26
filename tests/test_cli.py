@@ -232,3 +232,73 @@ def test_retries_flag_reaches_the_transfer_layer(monkeypatch, capsys):
     monkeypatch.setattr(cli, "fetch_record", fake_fetch)
     assert cli.main(["fetch", "zenodo:1", "-o", ".tmp/x", "--retries", "0"]) == 0
     assert seen["retries"] == 0
+
+
+# -- verify: names that leave --root -------------------------------------
+
+
+def _entry_outside(tmp_path, relative="../outside.txt"):
+    import hashlib
+
+    outside = (tmp_path / "data").parent / "outside.txt"
+    outside.write_bytes(b"outside")
+    return {"name": relative, "sha256": hashlib.sha256(b"outside").hexdigest()}
+
+
+def test_verify_flags_a_name_leaving_root(tmp_path, capsys):
+    entry = _entry_outside(tmp_path)
+    path = _manifest(tmp_path, [entry])
+    assert cli.main(["verify", str(path)]) == 1
+    out = capsys.readouterr()
+    assert "escaped" in out.out
+    assert "1/1 ok" not in out.out
+    assert "--allow-escape" in out.err
+
+
+def test_verify_follows_escapes_when_asked(tmp_path, capsys):
+    entry = _entry_outside(tmp_path)
+    path = _manifest(tmp_path, [entry])
+    assert cli.main(["verify", str(path), "--allow-escape"]) == 0
+    assert "ok" in capsys.readouterr().out
+
+
+def test_verify_allows_a_dotdot_that_stays_inside(tmp_path, capsys):
+    import hashlib
+
+    (tmp_path / "data" / "sub").mkdir(parents=True)
+    (tmp_path / "data" / "a.bin").write_bytes(b"payload")
+    entry = {"name": "sub/../a.bin", "sha256": hashlib.sha256(b"payload").hexdigest()}
+    path = _manifest(tmp_path, [entry])
+    assert cli.main(["verify", str(path)]) == 0
+    assert "ok" in capsys.readouterr().out
+
+
+def test_verify_flags_an_absolute_name(tmp_path, capsys):
+    import hashlib
+
+    absolute = tmp_path / "abs.bin"
+    absolute.write_bytes(b"abs")
+    entry = {"name": str(absolute), "sha256": hashlib.sha256(b"abs").hexdigest()}
+    path = _manifest(tmp_path, [entry])
+    assert cli.main(["verify", str(path)]) == 1
+    assert "escaped" in capsys.readouterr().out
+
+
+def test_verify_flags_a_symlink_pointing_out(tmp_path, capsys):
+    import hashlib
+    import os
+
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"linked")
+    link = tmp_path / "data" / "link.bin"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.symlink(outside, link)
+    except (OSError, NotImplementedError):
+        import pytest
+
+        pytest.skip("symlinks unavailable here")
+    entry = {"name": "link.bin", "sha256": hashlib.sha256(b"linked").hexdigest()}
+    path = _manifest(tmp_path, [entry])
+    assert cli.main(["verify", str(path)]) == 1
+    assert "escaped" in capsys.readouterr().out

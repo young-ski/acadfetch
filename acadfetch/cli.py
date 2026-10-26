@@ -175,11 +175,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
     # Names in a manifest are relative to the directory it was written into.
     # Defaulting to the cwd made the README's own example fail.
     root = Path(args.root) if args.root else manifest_path.parent
-    rows = manifest.verify_manifest(manifest_path, root)
+    rows = manifest.verify_manifest(manifest_path, root, allow_escape=args.allow_escape)
     bad = sum(1 for row in rows if row["status"] != "ok")
     for row in rows:
         print(f"{row['status']:>9} {row['name']}")
     print(f"\n{len(rows) - bad}/{len(rows)} ok")
+    if not args.allow_escape and any(row["status"] == "escaped" for row in rows):
+        print(f"some names leave {root} - --allow-escape follows them", file=sys.stderr)
     if not rows:
         print("the manifest lists no files", file=sys.stderr)
         return EXIT_FAIL
@@ -256,6 +258,11 @@ def build_parser() -> argparse.ArgumentParser:
     ver.add_argument(
         "--root",
         help="directory the manifest's names are relative to (default: the manifest's own directory)",
+    )
+    ver.add_argument(
+        "--allow-escape",
+        action="store_true",
+        help="follow names that leave --root (a manifest can point outside it)",
     )
     ver.set_defaults(func=cmd_verify)
 

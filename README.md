@@ -121,6 +121,12 @@ Every completed run writes `manifest.json`:
 mismatch or missing file. Commit the manifest next to your analysis; it is what
 makes the download reproducible a year later.
 
+Names are resolved against the manifest's own directory, and a name that points
+outside it — `../sibling/file`, an absolute path, a symlink leading out — is
+reported as `escaped` rather than quietly hashed, because a manifest is a
+document someone can hand you. `--allow-escape` follows them; `--root` changes
+what "inside" means.
+
 When a source publishes no checksum (arXiv), verification degrades to a byte
 count and `verified` is `null` rather than a false sense of safety.
 

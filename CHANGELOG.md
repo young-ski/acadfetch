@@ -6,6 +6,16 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
+### Changed
+
+- `verify` reports a name that leaves the root as `escaped` and exits 1 instead
+  of hashing whatever it points at. A manifest is a document you can be handed;
+  `../sibling/x`, an absolute path or a symlink leading out used to be verified
+  silently, which is how a green result stops meaning anything. `--allow-escape`
+  restores the old behaviour, `--root` decides what counts as inside. Paths that
+  use `..` but stay inside keep working, and the Windows-drive form no longer
+  silently becomes a relative directory on POSIX.
+
 ### Fixed
 
 - `verify` resolved names against the working directory instead of the

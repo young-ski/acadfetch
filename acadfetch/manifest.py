@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from .errors import ManifestError
 from .sources.base import Record, Result
 
 SCHEMA = 1
+_WINDOWS_ABS = re.compile(r"^[A-Za-z]:[\\/]")
 
 
 def build(record: Record, results: list[Result], token: Token | None = None) -> dict:
@@ -95,14 +97,40 @@ def load(path: Path) -> dict:
     return data
 
 
-def verify_manifest(path: Path, root: Path) -> list[dict]:
-    """Re-hash every recorded file. Returns one row per file."""
+def _absolute(name: str) -> bool:
+    # Path.is_absolute() is platform-bound: a Windows drive path is not absolute
+    # on POSIX, where it would otherwise resolve to a directory literally named
+    # "C:".
+    return Path(name).is_absolute() or bool(_WINDOWS_ABS.match(name))
+
+
+def _leaves_root(root: Path, name: str) -> bool:
+    if _absolute(name):
+        return True
+    try:
+        (root / name).resolve().relative_to(root.resolve())
+    except ValueError:
+        return True
+    return False
+
+
+def verify_manifest(path: Path, root: Path, allow_escape: bool = False) -> list[dict]:
+    """Re-hash every recorded file. Returns one row per file.
+
+    A name is only allowed to point inside ``root`` unless ``allow_escape`` is
+    set: a manifest is a document someone can hand you, and hashing a file
+    outside the directory while reporting ``ok`` is how a green result stops
+    meaning anything.
+    """
     data = load(path)
     rows = []
     for entry in data.get("files") or []:
         name = entry.get("name") if isinstance(entry, dict) else None
         if not isinstance(name, str) or not name:
             rows.append({"name": "(unnamed entry)", "status": "malformed"})
+            continue
+        if not allow_escape and _leaves_root(root, name):
+            rows.append({"name": name, "status": "escaped"})
             continue
         target = root / name
         if not target.is_file():
