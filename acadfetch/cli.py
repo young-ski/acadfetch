@@ -156,6 +156,10 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         print(f"{mark} {naming.sanitize(row.file.name)} {human(row.bytes)}{extra}")
         if row.error:
             print(f"     {row.error}")
+        if row.part:
+            # The bytes stay on disk, so say so: otherwise a failure reads as
+            # "nothing happened" and the rerun looks like it starts over.
+            print(f"     kept {human(row.bytes)} in {Path(row.part).name} - rerun to resume")
 
     data = manifest.build(record, results, token)
     try:

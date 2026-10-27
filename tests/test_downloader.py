@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -93,6 +94,14 @@ class Handler(BaseHTTPRequestHandler):
             body = body[:limit]
         if declared > len(body):  # declared a length it does not deliver
             body = body + b"\0" * 0
+        # A stall in the middle of the body, longer than the 1 s read poll:
+        # the shape of a flaky VPN, and of a slow cellular link.
+        stall_after = cfg.get("stall_after")
+        if stall_after is not None and cfg["hits"][path] == 1 and stall_after < len(body):
+            self.wfile.write(body[:stall_after])
+            self.wfile.flush()
+            time.sleep(cfg.get("stall_for", 2.0))
+            body = body[stall_after:]
         self.wfile.write(body)
         self.wfile.flush()
 
@@ -111,6 +120,8 @@ def server():
         "always_500": set(),
         "lies_about_range": set(),
         "declares": {},
+        "stall_after": None,
+        "stall_for": 2.0,
     }
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
@@ -541,3 +552,48 @@ def test_a_stalled_body_hits_the_idle_budget(server, tmp_path):
     res = downloader.fetch_file(client, f, opts(tmp_path, retries=0), set())
     assert res.state == "failed"
     assert "timed out" in res.error.lower()
+
+
+def test_survives_a_stall_longer_than_the_read_poll(server, tmp_path):
+    """One 1.6 s gap mid-body must cost no retry and no bytes.
+
+    ``socket.SocketIO`` latches its first timeout and refuses every later read,
+    so a stall used to end the transfer even though the socket was healthy.
+    """
+    payload = bytes(range(256)) * 1200  # 307_200 bytes, several chunks
+    server.cfg["files"]["/a.bin"] = payload
+    server.cfg["stall_after"] = 70_000
+    server.cfg["stall_for"] = 1.6
+    f = File(server.base + "/a.bin", "a.bin", len(payload))
+    res = downloader.fetch_file(Client(rate=1000, retries=0), f, opts(tmp_path, retries=0), set())
+    assert res.state == "downloaded", res.error
+    assert (tmp_path / "a.bin").read_bytes() == payload
+    assert server.cfg["hits"]["/a.bin"] == 1, "a stall must not need a retry"
+
+
+def test_part_survives_a_spent_retry_budget(server, tmp_path):
+    """A failure that already paid for bytes keeps them, and says where they are."""
+    server.cfg["files"]["/a.bin"] = b"q" * 5_000
+    server.cfg["declares"]["/a.bin"] = 999_999  # a server that over-promises
+    server.cfg["truncate_at"] = 10
+    f = File(server.base + "/a.bin", "a.bin")  # size unknown, so no early check
+    res = downloader.fetch_file(Client(rate=1000, retries=0), f, opts(tmp_path, retries=0), set())
+    assert res.state == "failed"
+    part = tmp_path / "a.bin.part"
+    assert part.read_bytes() == b"q" * 10
+    assert res.part == str(part)
+    assert res.bytes == 10
+    assert not (tmp_path / "a.bin").exists()
+
+
+def test_part_is_dropped_on_a_checksum_mismatch(server, tmp_path):
+    """Bytes that do not match are worthless to resume from, so they go."""
+    payload = b"wrong" * 100
+    server.cfg["files"]["/a.bin"] = payload
+    f = File(server.base + "/a.bin", "a.bin", len(payload), "md5:" + "0" * 32)
+    res = downloader.fetch_file(Client(rate=1000, retries=0), f, opts(tmp_path, retries=0), set())
+    assert res.state == "failed"
+    assert "checksum" in res.error
+    assert res.part is None
+    assert not (tmp_path / "a.bin.part").exists()
+    assert not (tmp_path / "a.bin").exists()

@@ -44,6 +44,8 @@ class Result:
     verified: bool | None = None
     error: str = ""
     resumed_from: int = 0
+    #: Set when a failed transfer left a resumable ``.part`` behind.
+    part: str | None = None
 
     @property
     def ok(self) -> bool:

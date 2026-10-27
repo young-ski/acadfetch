@@ -19,6 +19,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
+from http.client import HTTPException
 from pathlib import Path
 
 from . import atomic, naming, verify
@@ -30,6 +31,9 @@ from .sources.base import File, Record, Result
 from .units import human
 
 TRANSFER_ATTEMPTS = 3
+#: ``IncompleteRead`` is an ``HTTPException``, not an ``OSError``: a body cut
+#: short mid-stream used to escape the retry loop and the CLI as a traceback.
+HTTP_EXC = (HTTPException,)
 META_SUFFIX = ".part.meta.json"
 
 
@@ -74,6 +78,14 @@ def _write_meta(path: Path, data: dict) -> None:
     atomic.replace(tmp, path)
 
 
+def _kept_bytes(part: Path) -> int:
+    """Size of a partial worth resuming; 0 when there is nothing to keep."""
+    try:
+        return part.stat().st_size
+    except OSError:
+        return 0
+
+
 def _drop(*paths: Path) -> None:
     for path in paths:
         atomic.unlink(path)
@@ -107,6 +119,25 @@ def _socket_of(resp) -> object | None:  # noqa: ANN001
     return getattr(raw, "_sock", None)
 
 
+def _clear_timeout_latch(resp) -> None:  # noqa: ANN001
+    """Re-arm a response whose socket timeout already fired.
+
+    ``socket.SocketIO`` sets ``_timeout_occurred`` on the first ``timeout`` and
+    then raises ``OSError("cannot read from timed out object")`` from every
+    later read, forever -- even though the socket itself is healthy. That is
+    what made a single stalled read end the transfer: nothing can unblock a
+    blocked read from another thread on Windows (closing does not), so the poll
+    has to keep firing, and the latch has to be cleared for the stream to stay
+    usable.
+
+    The attribute is private, so a missing one simply restores the old
+    behaviour instead of breaking the run.
+    """
+    stream = getattr(getattr(resp, "fp", None), "raw", None)
+    if getattr(stream, "_timeout_occurred", False):
+        stream._timeout_occurred = False
+
+
 def _chunks(resp, idle_timeout: float, url: str):  # noqa: ANN001, ANN202
     """Yield body chunks, polling so an interrupt lands quickly.
 
@@ -128,6 +159,7 @@ def _chunks(resp, idle_timeout: float, url: str):  # noqa: ANN001, ANN202
         except TimeoutError:
             if time.monotonic() > deadline:
                 raise
+            _clear_timeout_latch(resp)
             continue
         if not chunk:
             return
@@ -298,7 +330,7 @@ def _attempt(
                     blocked += 1
                 elif exc.status in (401, 403, 404, 410):
                     break  # terminal for this URL; a fallback may still work
-            except (OSError, ConnectionError, ValueError) as exc:
+            except (*HTTP_EXC, OSError, ConnectionError, ValueError) as exc:
                 # ValueError: the response was closed under us by an interrupt.
                 last = exc
             if _STOP.is_set():
@@ -312,8 +344,13 @@ def _attempt(
             _drop(part, meta_path)
             resumed_from = 0
             continue
-        _drop(part, meta_path)
-        return Result(file=file, state="failed", error=str(last))
+        return Result(
+            file=file,
+            state="failed",
+            error=str(last),
+            bytes=_kept_bytes(part),
+            part=str(part) if _kept_bytes(part) else None,
+        )
 
     if last is not None and not part.exists():
         return Result(file=file, state="failed", error=str(last))
