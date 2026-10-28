@@ -9,16 +9,36 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from . import auth, consts, manifest, naming
 from .client import Client
-from .downloader import Options, fetch_record, human
+from .downloader import Options, check_total, fetch_record, human
 from .errors import AcFError, PartialError, TargetError
 from .progress import Progress
-from .sources import registry
+from .sources import doi, registry
 
 EXIT_OK, EXIT_FAIL, EXIT_PARTIAL, EXIT_INTERRUPT = 0, 1, 2, 130
+EXAMPLES = {
+    "zenodo": "zenodo:123456",
+    "figshare": "figshare:987654",
+    "arxiv": "arxiv:2401.12345",
+    "doi": "10.5281/zenodo.123456",
+    "direct": "https://example.org/data.tar.gz",
+}
+EPILOG = """target forms:
+  10.5281/zenodo.123456        a DOI
+  zenodo:123456                a record id
+  figshare:987654
+  arxiv:2401.12345
+  https://host/file.tar.gz     any URL
+
+exit codes:
+  0 ok    1 failed    2 partial    130 interrupted (partials kept, rerun to resume)
+
+environment: ZENODO_TOKEN, FIGSHARE_TOKEN (sent only to that repository)
+"""
 _SIZE = re.compile(r"^(\d+(?:\.\d+)?)\s*([KMGT]i?B?|B?)$", re.I)
 
 
@@ -42,6 +62,26 @@ def parse_size(text: str) -> int:
     return int(value * scale)
 
 
+def _rate(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number: {text!r}") from None
+    if value <= 0:
+        raise argparse.ArgumentTypeError("must be > 0; 2 means two requests/second")
+    return value
+
+
+def _positive(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a whole number: {text!r}") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be >= 1")
+    return value
+
+
 def _count(text: str) -> int:
     try:
         value = int(text)
@@ -54,7 +94,7 @@ def _count(text: str) -> int:
 
 def cmd_sources(_: argparse.Namespace) -> int:
     for name in registry.names():
-        print(name)
+        print(f"{name:<9} {EXAMPLES.get(name, '')}".rstrip())
     return EXIT_OK
 
 
@@ -78,6 +118,24 @@ def _headers(raw: list[str] | None) -> dict[str, str]:
             raise TargetError(f"--header needs 'Name: value', got {item!r}")
         out[key.strip()] = value.strip()
     return out
+
+
+def _looks_like_target(text: str) -> bool:
+    if text.isdigit() or doi.match(text):
+        return True
+    return any(adapter.match(text) for adapter in registry.ADAPTERS)
+
+
+def _recover_target(args: argparse.Namespace) -> None:
+    """``--only a.pdf <target>`` makes argparse eat the target; put it back.
+
+    Checked only when the target is missing, so a file that happens to look
+    like an id keeps working as long as the target is spelled out.
+    """
+    if getattr(args, "target", None) is not None or not getattr(args, "only", None):
+        return
+    if len(args.only) > 1 and _looks_like_target(args.only[-1]):
+        args.target = args.only.pop()
 
 
 def _resolve(args: argparse.Namespace, client: Client):
@@ -113,6 +171,17 @@ def _print_header(record) -> None:  # noqa: ANN001
         print(f"landing : {record.landing}")
 
 
+def _selected(record, only: list[str] | None):  # noqa: ANN001, ANN202
+    if not only:
+        return record.files
+    wanted = {n.lower() for n in only}
+    return [
+        f
+        for f in record.files
+        if naming.sanitize(f.name).lower() in wanted or f.name.lower() in wanted
+    ]
+
+
 def cmd_fetch(args: argparse.Namespace) -> int:
     client = _client(args)
     record = _resolve(args, client)
@@ -133,14 +202,21 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     )
 
     if args.dry_run:
-        for file in record.files:
+        chosen = _selected(record, args.only)
+        if not chosen:
+            print(f"acadfetch: no file matched --only {', '.join(args.only)}", file=sys.stderr)
+            return EXIT_FAIL
+        if args.max_size:
+            check_total(replace(record, files=chosen), args.max_size)
+        print(f"would write to {out_dir}")
+        for file in chosen:
             print(f"  would fetch {naming.sanitize(file.name)} ({human(file.size)})")
         return EXIT_OK
 
     try:
         results = fetch_record(record, opts, client, only=args.only)
     except PartialError:
-        print(f"no file matched --only {args.only}", file=sys.stderr)
+        print(f"acadfetch: no file matched --only {', '.join(args.only)}", file=sys.stderr)
         return EXIT_FAIL
     finally:
         progress.finish()
@@ -220,6 +296,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="acadfetch",
         description="Resumable, rate-limited, checksum-verified bulk downloads from data repositories.",
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--version", action="version", version=f"acadfetch {consts.__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -227,13 +305,13 @@ def build_parser() -> argparse.ArgumentParser:
     def network_flags(p: argparse.ArgumentParser) -> None:
         p.add_argument(
             "--rate",
-            type=float,
+            type=_rate,
             default=consts.DEFAULT_RATE,
             help="requests per second, global (default: %(default)s)",
         )
         p.add_argument(
             "--retries",
-            type=int,
+            type=_count,
             default=consts.DEFAULT_RETRIES,
             help="retries per request on 5xx/429/network errors (default: %(default)s)",
         )
@@ -258,14 +336,31 @@ def build_parser() -> argparse.ArgumentParser:
         )
 
     fetch = sub.add_parser("fetch", help="download every file of a record")
-    fetch.add_argument("target", help="DOI, zenodo:<id>, figshare:<id>, arxiv:<id>, or URL")
-    fetch.add_argument("-o", "--out", help="output directory")
-    fetch.add_argument("-j", "--concurrency", type=int, default=consts.DEFAULT_CONCURRENCY)
+    fetch.add_argument(
+        "target",
+        nargs="?",
+        help="DOI, zenodo:<id>, figshare:<id>, arxiv:<id>, or URL",
+    )
+    fetch.add_argument(
+        "-o", "--out", help="output directory (default: acadfetch-out/<source>-<id>)"
+    )
+    fetch.add_argument(
+        "-j",
+        "--concurrency",
+        type=_positive,
+        default=consts.DEFAULT_CONCURRENCY,
+        help="parallel transfers (default: %(default)s)",
+    )
     fetch.add_argument("--max-size", type=parse_size, help="abort above this total, e.g. 500MB")
-    fetch.add_argument("--only", nargs="+", metavar="NAME", help="fetch only these file names")
-    fetch.add_argument("--manifest-out", help="also write manifest.json here")
-    fetch.add_argument("-n", "--dry-run", action="store_true")
-    fetch.add_argument("-q", "--quiet", action="store_true")
+    fetch.add_argument(
+        "--only",
+        nargs="+",
+        metavar="NAME",
+        help="fetch only these file names; put the target first, or the names swallow it",
+    )
+    fetch.add_argument("--manifest-out", help="also write the manifest here")
+    fetch.add_argument("-n", "--dry-run", action="store_true", help="list what would be fetched")
+    fetch.add_argument("-q", "--quiet", action="store_true", help="no progress line")
     network_flags(fetch)
     fetch.set_defaults(func=cmd_fetch)
 
@@ -300,6 +395,14 @@ def main(argv: list[str] | None = None) -> int:
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
     args = build_parser().parse_args(argv)
+    _recover_target(args)
+    if getattr(args, "command", "") == "fetch" and getattr(args, "target", None) is None:
+        print(
+            "acadfetch: which record? put a target after --only, e.g. "
+            "acadfetch fetch zenodo:123456 --only raw.tar.gz",
+            file=sys.stderr,
+        )
+        return EXIT_FAIL
     try:
         return args.func(args)
     except TargetError as exc:

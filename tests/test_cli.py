@@ -349,3 +349,56 @@ def test_verify_warns_that_a_schema_1_manifest_can_mislead(tmp_path, capsys):
     captured = capsys.readouterr()
     assert "schema 1" in captured.err
     assert "1/1 ok" in captured.out
+
+
+def test_negative_concurrency_is_refused():
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["fetch", "zenodo:1", "-j", "0"])
+
+
+def test_rate_zero_says_what_valid_looks_like(capsys):
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["fetch", "zenodo:1", "--rate", "0"])
+    assert "two requests/second" in capsys.readouterr().err
+
+
+def test_only_before_the_target_still_finds_it(monkeypatch, capsys):
+    _stub_resolve(monkeypatch)
+    assert cli.main(["fetch", "--only", "f", "zenodo:1", "-n"]) == 0
+    assert "would fetch f" in capsys.readouterr().out
+
+
+def test_fetch_without_a_target_says_what_to_type(capsys):
+    assert cli.main(["fetch"]) == 1
+    assert "which record?" in capsys.readouterr().err
+
+
+def test_dry_run_prints_the_destination(monkeypatch, capsys):
+    """The default directory is a decision; a dry run has to show it."""
+    _stub_resolve(monkeypatch)
+    assert cli.main(["fetch", "zenodo:1", "-n"]) == 0
+    assert "would write to" in capsys.readouterr().out
+
+
+def test_dry_run_applies_only(monkeypatch, capsys):
+    _stub_resolve(monkeypatch)
+    assert cli.main(["fetch", "zenodo:1", "-n", "--only", "nope"]) == 1
+    assert "no file matched" in capsys.readouterr().err
+
+
+def test_max_size_is_refused_before_any_bytes(monkeypatch, capsys):
+    from acadfetch.sources import registry
+    from acadfetch.sources.base import File, Record
+
+    def fake(client, target, allow_doi=True):
+        client.source = "zenodo"
+        return Record(source="zenodo", target=target, files=[File("https://x/f", "f", 10)])
+
+    monkeypatch.setattr(registry, "resolve", fake)
+    assert cli.main(["fetch", "zenodo:1", "--max-size", "1B"]) == 1
+    assert "over --max-size" in capsys.readouterr().err
+
+
+def test_sources_shows_a_usable_example(capsys):
+    assert cli.main(["sources"]) == 0
+    assert "zenodo:123456" in capsys.readouterr().out

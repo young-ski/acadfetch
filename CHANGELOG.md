@@ -15,6 +15,20 @@ pre-1.0: a minor bump may break a flag.
 - A failed entry in a schema 2 manifest said `no-checksum-published`, which read
   as if the bytes were checked; it says `transfer-failed`.
 
+- `--rate 0` printed a traceback from deep inside the limiter, `-j 0` and
+  `--retries -1` were silently clamped, and `-n` ignored `--only` entirely.
+  Each flag now validates itself and says what it wants.
+- A failure says the next command (`rerun to resume`, `--rate 1 -j 1`,
+  `--retry-403 2`, or a DNS/VPN pointer) instead of only what went wrong, and
+  `--max-size` reads as a local refusal rather than `HTTP 0`.
+- `--only a.pdf <target>` used to make argparse eat the target and then blame
+  the user for not supplying one; the target is recovered.
+- `fetch` with no arguments offered only an argparse usage line: it now says
+  what to type, `--help` lists the target forms and the exit codes, and
+  `sources` prints one usable example per source.
+- `-n` prints the directory it would write to, which is how the default
+  `acadfetch-out/` stops being a surprise.
+
 ### Changed
 
 - `manifest.json` is schema 2. It records the file name **on disk** rather than

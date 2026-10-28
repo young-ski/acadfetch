@@ -298,7 +298,10 @@ def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Opt
                         opts.progress.advance(len(chunk))
                     if opts.max_bytes and offset + written > opts.max_bytes:
                         raise HttpError(
-                            0, file.url, f"exceeds --max-size ({human(opts.max_bytes)})"
+                            0,
+                            file.url,
+                            f"refused locally: over --max-size ({human(opts.max_bytes)})",
+                            reason="max-size",
                         )
         finally:
             with _LIVE_LOCK:
@@ -376,7 +379,7 @@ def _attempt(
                 if exc.reason == "html-page":
                     # Markup is not the file, so it must not be resumed onto.
                     _drop(part, meta_path)
-                if exc.status == 0 and "exceeds --max-size" in str(exc):
+                if exc.reason == "max-size":
                     # Do not leave an over-limit part for the next run to
                     # resume straight back into the same wall.
                     _drop(part, meta_path)
@@ -402,7 +405,7 @@ def _attempt(
         return Result(
             file=file,
             state="failed",
-            error=str(last),
+            error=f"{last}{_hint(last)}",
             bytes=_kept_bytes(part),
             part=str(part) if _kept_bytes(part) else None,
         )
@@ -425,7 +428,7 @@ def _attempt(
             _transfer(client, file, part, meta_path, opts)
             verdict = verify.matches(part, file.checksum)
         except Exception as exc:  # noqa: BLE001
-            return Result(file=file, state="failed", error=f"re-download failed: {exc}")
+            return Result(file=file, state="failed", error=f"re-download failed: {exc}{_hint(exc)}")
         if verdict is False:
             _drop(part, meta_path)
             return Result(file=file, state="failed", error="checksum mismatch")
@@ -473,7 +476,7 @@ def _fetch_record(
             raise PartialError([])
 
     if opts.max_bytes:
-        _enforce_total(record, opts.max_bytes)
+        check_total(record, opts.max_bytes)
 
     taken: set[str] = set()
     lock = threading.Lock()
@@ -525,7 +528,19 @@ def _in_record_order(results: list[Result], record: Record) -> list[Result]:
     return sorted(results, key=lambda r: order.get(id(r.file), 0))
 
 
-def _enforce_total(record: Record, limit: int) -> None:
+def _hint(exc: Exception) -> str:
+    """The next command, appended to an error that a user can act on."""
+    text = str(exc).lower()
+    if isinstance(exc, TimeoutError) or "timed out" in text:
+        return " - the link stalled; rerun to resume, or try --rate 1 -j 1"
+    if "getaddrinfo" in text or "name or service not known" in text:
+        return " - name resolution failed; check DNS, VPN or proxy settings"
+    if getattr(exc, "status", None) == 403:
+        return " - if a WAF is involved, retry with --retry-403 2"
+    return ""
+
+
+def check_total(record: Record, limit: int) -> None:
     total = record.total_bytes
     if total is None:
         return

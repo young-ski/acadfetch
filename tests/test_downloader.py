@@ -87,13 +87,17 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", cfg["types"].get(path, "application/octet-stream"))
         declared = cfg["declares"].get(path, len(body))
         self.send_header("Content-Length", str(declared))
+        try:  # a malformed header (e.g. "12, 12") is a case under test
+            declared_n: int | None = int(str(declared).strip())
+        except ValueError:
+            declared_n = None
         self.send_header("ETag", cfg["etag"])
         self.end_headers()
         limit = cfg.get("truncate_at")
         if limit is not None and cfg["hits"][path] <= cfg.get("truncate_times", 1):
             body = body[:limit]
-        if declared > len(body):  # declared a length it does not deliver
-            body = body + b"\0" * 0
+        if declared_n is not None and declared_n > len(body):
+            pass  # declared more than it delivers; the client must notice
         # A stall in the middle of the body, longer than the 1 s read poll:
         # the shape of a flaky VPN, and of a slow cellular link.
         stall_after = cfg.get("stall_after")
@@ -553,6 +557,8 @@ def test_a_stalled_body_hits_the_idle_budget(server, tmp_path):
     res = downloader.fetch_file(client, f, opts(tmp_path, retries=0), set())
     assert res.state == "failed"
     assert "timed out" in res.error.lower()
+    # and it says what to do next, not just what went wrong
+    assert "rerun to resume" in res.error
 
 
 def test_survives_a_stall_longer_than_the_read_poll(server, tmp_path):
