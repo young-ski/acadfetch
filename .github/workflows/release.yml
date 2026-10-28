@@ -31,7 +31,7 @@ jobs:
     timeout-minutes: 10
     if: startsWith(github.ref, 'refs/tags/')
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: The tag is on main
@@ -62,7 +62,7 @@ jobs:
       id-token: write # the OIDC token PyPI accepts
       attestations: write # the provenance record below
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
@@ -71,12 +71,12 @@ jobs:
         run: ls -l dist/ && sha256sum dist/*
 
       - name: Attach a provenance record to the artifacts
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: "dist/*"
 
       # Pinned to a tag rather than `@release/v1`, which is a moving branch.
-      - uses: pypa/gh-action-pypi-publish@v1.12.4
+      - uses: pypa/gh-action-pypi-publish@v1.14.3
         with:
           skip-existing: false
 
@@ -87,7 +87,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install the published version, from PyPI
