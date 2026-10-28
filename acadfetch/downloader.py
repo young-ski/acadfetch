@@ -34,6 +34,37 @@ TRANSFER_ATTEMPTS = 3
 #: ``IncompleteRead`` is an ``HTTPException``, not an ``OSError``: a body cut
 #: short mid-stream used to escape the retry loop and the CLI as a traceback.
 HTTP_EXC = (HTTPException,)
+#: Extensions that are never legitimately served as text/html: an HTML body for
+#: one of these is a WAF block page or a login redirect, not the file.
+_BINARY_EXT = frozenset(
+    {
+        ".pdf",
+        ".zip",
+        ".tar",
+        ".gz",
+        ".bz2",
+        ".xz",
+        ".zst",
+        ".7z",
+        ".rar",
+        ".csv",
+        ".tsv",
+        ".parquet",
+        ".npy",
+        ".npz",
+        ".h5",
+        ".hdf5",
+        ".fits",
+        ".docx",
+        ".xlsx",
+        ".pptx",
+        ".bin",
+        ".dat",
+        ".nc",
+        ".sav",
+        ".dta",
+    }
+)
 META_SUFFIX = ".part.meta.json"
 
 
@@ -119,6 +150,13 @@ def _socket_of(resp) -> object | None:  # noqa: ANN001
     return getattr(raw, "_sock", None)
 
 
+def _is_error_page(content_type: str, name: str) -> bool:
+    """True when an HTML body cannot be the file that was asked for."""
+    if "html" not in content_type.lower():
+        return False
+    return Path(name).suffix.lower() in _BINARY_EXT
+
+
 def _clear_timeout_latch(resp) -> None:  # noqa: ANN001
     """Re-arm a response whose socket timeout already fired.
 
@@ -199,6 +237,17 @@ def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Opt
 
     with resp:
         status = getattr(resp, "status", 200)
+        content_type = resp.headers.get("Content-Type") or ""
+        if _is_error_page(content_type, file.name):
+            # Say what it is instead of baking the markup into a .pdf and
+            # calling that finished, which also makes the next run skip it.
+            raise HttpError(
+                0,
+                file.url,
+                f"server answered {content_type.split(';')[0]} for {file.name!r} "
+                f"(an error or login page, not the file)",
+                reason="html-page",
+            )
         declared = _content_length(resp.headers, file.url)
         whole = True
         if have and status == 206:
@@ -324,6 +373,9 @@ def _attempt(
                 break
             except HttpError as exc:
                 last = exc
+                if exc.reason == "html-page":
+                    # Markup is not the file, so it must not be resumed onto.
+                    _drop(part, meta_path)
                 if exc.status == 0 and "exceeds --max-size" in str(exc):
                     # Do not leave an over-limit part for the next run to
                     # resume straight back into the same wall.

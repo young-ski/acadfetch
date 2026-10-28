@@ -23,10 +23,20 @@ class HttpError(AcFError):
     the API's own permission check.
     """
 
-    def __init__(self, status: int, url: str, detail: str = "", transient: bool = False) -> None:
+    def __init__(
+        self,
+        status: int,
+        url: str,
+        detail: str = "",
+        transient: bool = False,
+        reason: str = "",
+    ) -> None:
         self.status = status
         self.url = url
         self.transient = transient
+        #: Machine-readable cause for callers that must branch on it, e.g.
+        #: ``html-page``: the body is a block/login page, not the file asked for.
+        self.reason = reason
         super().__init__(f"HTTP {status} for {url}{': ' + detail if detail else ''}")
 
 

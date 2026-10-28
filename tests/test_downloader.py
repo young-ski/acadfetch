@@ -84,7 +84,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header(
                     "Content-Range", f"bytes {start}-{len(payload) - 1}/{len(payload)}"
                 )
-        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Type", cfg["types"].get(path, "application/octet-stream"))
         declared = cfg["declares"].get(path, len(body))
         self.send_header("Content-Length", str(declared))
         self.send_header("ETag", cfg["etag"])
@@ -120,6 +120,7 @@ def server():
         "always_500": set(),
         "lies_about_range": set(),
         "declares": {},
+        "types": {},
         "stall_after": None,
         "stall_for": 2.0,
     }
@@ -597,3 +598,36 @@ def test_part_is_dropped_on_a_checksum_mismatch(server, tmp_path):
     assert res.part is None
     assert not (tmp_path / "a.bin.part").exists()
     assert not (tmp_path / "a.bin").exists()
+
+
+HTML_PAGE = b"<!DOCTYPE html><html><body>403 Forbidden</body></html>"
+
+
+def test_an_html_body_for_a_pdf_is_refused(server, tmp_path):
+    """A WAF block page must not become a .pdf that later runs skip."""
+    server.cfg["files"]["/a.pdf"] = HTML_PAGE
+    server.cfg["types"]["/a.pdf"] = "text/html; charset=utf-8"
+    f = File(server.base + "/a.pdf", "a.pdf", len(HTML_PAGE))
+    res = downloader.fetch_file(Client(rate=1000, retries=0), f, opts(tmp_path, retries=0), set())
+    assert res.state == "failed"
+    assert "text/html" in res.error and "login page" in res.error
+    assert res.part is None
+    assert not (tmp_path / "a.pdf").exists()
+    assert not (tmp_path / "a.pdf.part").exists()
+
+
+def test_an_html_body_for_an_html_file_is_fine(server, tmp_path):
+    server.cfg["files"]["/index.html"] = HTML_PAGE
+    server.cfg["types"]["/index.html"] = "text/html"
+    f = File(server.base + "/index.html", "index.html", len(HTML_PAGE))
+    res = downloader.fetch_file(Client(rate=1000, retries=0), f, opts(tmp_path, retries=0), set())
+    assert res.state == "downloaded"
+    assert (tmp_path / "index.html").read_bytes() == HTML_PAGE
+
+
+def test_an_html_body_with_an_unknown_extension_is_fine(server, tmp_path):
+    server.cfg["files"]["/payload"] = HTML_PAGE
+    server.cfg["types"]["/payload"] = "text/html"
+    f = File(server.base + "/payload", "payload", len(HTML_PAGE))
+    res = downloader.fetch_file(Client(rate=1000, retries=0), f, opts(tmp_path, retries=0), set())
+    assert res.state == "downloaded"

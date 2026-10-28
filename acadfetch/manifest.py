@@ -59,7 +59,11 @@ def _entry(f, result: Result | None) -> dict:  # noqa: ANN001
         "bytes": result.bytes if result else 0,
         "state": result.state if result else "missing",
         "verified": result.verified if result else None,
-        "verified_reason": verify.reason(f.checksum, result.verified if result else None),
+        "verified_reason": (
+            "transfer-failed"
+            if result and result.state == "failed"
+            else verify.reason(f.checksum, result.verified if result else None)
+        ),
     }
 
 

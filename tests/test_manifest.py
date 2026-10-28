@@ -150,3 +150,9 @@ def test_schema_1_is_still_read_and_can_be_flagged(tmp_path):
     assert manifest.load(path)["schema"] == 1
     assert manifest.verify_manifest(path, tmp_path)[0]["status"] == "ok"
     assert manifest.peek_schema(tmp_path / "absent.json") is None
+
+
+def test_a_failed_entry_says_transfer_failed(tmp_path):
+    rec = record(tmp_path)
+    failed = Result(rec.files[0], "failed", error="HTTP 500", name="a.csv")
+    assert manifest.build(rec, [failed])["files"][0]["verified_reason"] == "transfer-failed"

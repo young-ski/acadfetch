@@ -6,6 +6,15 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
+### Fixed
+
+- A body served as `text/html` for a `.pdf`/`.zip`/`.csv`/… was written out and
+  reported `downloaded`, so a WAF block page or a login redirect became a file
+  that the *next* run skipped as already present. Those bodies are refused now,
+  with the reason named, and the markup is not kept for resume.
+- A failed entry in a schema 2 manifest said `no-checksum-published`, which read
+  as if the bytes were checked; it says `transfer-failed`.
+
 ### Changed
 
 - `manifest.json` is schema 2. It records the file name **on disk** rather than
