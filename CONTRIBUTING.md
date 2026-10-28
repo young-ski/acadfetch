@@ -3,9 +3,17 @@
 ## Setup
 
 ```bash
-python -m venv .venv && . .venv/bin/activate   # Windows: .venv\Scripts\activate
-python -m pip install -e . pytest ruff
+python -m venv .venv && . .venv/bin/activate   # Windows: .venv/Scripts/activate
+python -m pip install -e . pytest pytest-cov ruff
 ruff check . && pytest -q
+
+CI runs three gates; matching them locally is the point, so run all of them
+before a PR:
+
+```bash
+ruff check . && ruff format --check .
+pytest -q --cov=acadfetch --cov-fail-under=85    # the floor stops a gutted test
+python -X dev -W error -m pytest -q              # unraisable warnings are failures
 ```
 
 ## Ground rules

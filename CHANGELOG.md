@@ -29,6 +29,21 @@ pre-1.0: a minor bump may break a flag.
 - `-n` prints the directory it would write to, which is how the default
   `acadfetch-out/` stops being a surprise.
 
+### Documentation
+
+- The usage block was four placeholders deep: two of the first three ids did not
+  resolve. It now leads with four real records, says which ones are placeholders,
+  and offers `uvx` so a first run needs no install at all.
+- `docs/troubleshooting.md` indexes the failures people actually hit (stall, DNS
+  blackhole, figshare 403, block page, `MISMATCH`, escaped names, long paths) and
+  what to do about each.
+- README no longer over-promises: `figshare` is marked experimental, the
+  progress line's piped behaviour matches what it does, and the
+  "resume keeps the partial" claim is true now rather than aspirational.
+- `acadfetch-out/` is in `.gitignore`; `-n` prints it.
+- CONTRIBUTING lists the three gates CI actually runs (coverage floor and
+  `-W error` were local-green-but-CI-red traps).
+
 ### Changed
 
 - `manifest.json` is schema 2. It records the file name **on disk** rather than

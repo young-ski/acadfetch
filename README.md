@@ -42,11 +42,23 @@ cite.
 
 Python 3.10–3.15. No runtime dependencies.
 
+Try it without installing anything:
+
+```bash
+uvx acadfetch fetch 10.5281/zenodo.23612969   # uv
+```
+
+Or keep it on the PATH:
+
 ```bash
 pipx install acadfetch
-# or, from a checkout
-pipx install git+https://github.com/young-ski/acadfetch
-python -m pip install -e .
+```
+
+From a checkout, for development:
+
+```bash
+git clone https://github.com/young-ski/acadfetch && cd acadfetch
+python -m pip install -e . && python -m pytest -q
 ```
 
 ## Supported platforms
@@ -61,31 +73,44 @@ python -m pip install -e .
 
 ## Usage
 
+These four work as typed -- they are real records, not placeholders:
+
 ```bash
-acadfetch fetch 10.5281/zenodo.123456          # a DOI
-acadfetch fetch zenodo:123456                  # a record id
-acadfetch fetch figshare:987654
-acadfetch fetch arxiv:2401.12345
-acadfetch fetch https://example.org/dataset.tar.gz
-
-acadfetch fetch zenodo:123456 -n               # dry run: what would be fetched
-acadfetch fetch zenodo:123456 --only raw.tar.gz
-acadfetch fetch zenodo:123456 --max-size 2GB   # refuse anything bigger
-acadfetch fetch zenodo:123456 -j 1 --rate 0.5  # be a good citizen
-acadfetch manifest zenodo:123456 -o m.json     # metadata only, no bytes
-acadfetch fetch zenodo:123456 --header "Authorization: Bearer $TOKEN"   # restricted record
-
-acadfetch verify ./data/manifest.json          # re-hash a directory you downloaded
-acadfetch sources                              # list adapters
+acadfetch fetch 10.5281/zenodo.23612969        # a DOI
+acadfetch fetch arxiv:1706.03762               # an arXiv id
+acadfetch fetch figshare:32519553              # an article id
+acadfetch fetch https://example.org/dataset.tar.gz   # any URL
 ```
 
-Progress is one aggregate line for the whole run (`3 file(s)  12.4/44.1 MiB  1.8 MiB/s  ETA 0:17`),
-redrawn in place on a TTY and written as occasional whole lines when stdout is a pipe.
-`-q` turns it off.
+The rest of the surface:
 
-Output defaults to `acadfetch-out/<source>-<doi-or-id>`. Files land in
-`<name>.part` and are renamed only after the checksum matches, so an interrupted
-run never leaves something that *looks* finished.
+```bash
+acadfetch fetch 10.5281/zenodo.23612969 -n     # dry run: which dir, which files
+acadfetch fetch 10.5281/zenodo.23612969 --only raw.tar.gz
+acadfetch fetch 10.5281/zenodo.23612969 --max-size 2GB   # refuse anything bigger
+acadfetch fetch 10.5281/zenodo.23612969 -j 1 --rate 0.5  # be a good citizen
+acadfetch manifest 10.5281/zenodo.23612969 -o m.json     # metadata only, no bytes
+acadfetch fetch zenodo:123456 --header "Authorization: Bearer $TOKEN"   # restricted
+
+acadfetch verify ./data/manifest.json          # re-hash what you downloaded
+acadfetch sources                              # adapters, with an example each
+```
+
+`10.5281/zenodo.123456`, `zenodo:123456`, `figshare:987654` and `arxiv:2401.12345`
+are placeholders; use any real id. `figshare` needs a network its WAF likes --
+see [docs/troubleshooting.md](docs/troubleshooting.md) if it answers 403.
+
+Progress is one aggregate line for the whole run
+(`3 file(s)  12.4/44.1 MiB  1.8 MiB/s  ETA 0:17`), redrawn in place on a TTY.
+When stdout is a pipe it is rewritten as a fresh whole line at most every 5 s, so
+a CI log stays greppable without becoming a wall. `-q` turns it off.
+
+Output defaults to `acadfetch-out/<source>-<doi-or-id>`, and `-n` prints it before
+you spend bandwidth. Files land in `<name>.part` and are renamed only after the
+checksum matches, so an interrupted or failed run never leaves something that
+*looks* finished -- and never throws away the bytes it already paid for: rerun and
+it resumes. `acadfetch-out/` is worth adding to a project's `.gitignore`; this
+repository already has it.
 
 Exit codes: `0` success, `1` failure, `2` partial, `130` interrupted (rerun to resume).
 
@@ -152,8 +177,10 @@ Figshare's API sits behind a WAF that intermittently answers 403 to non-browser
 clients (an AWS ELB block page, some networks always, some never). Those 403s
 are retried twice with backoff, then the legacy per-file endpoint is tried;
 a 403 that is the API's own permission error is still terminal. Downloads
-themselves go to `ndownloader`, which the WAF leaves alone. The payload shapes
-are pinned in `tests/fixtures/`.
+themselves go to `ndownloader`, which the WAF leaves alone. The Figshare payload
+shape and block page are pinned in `tests/fixtures/` (the other adapters rely on
+their tests instead). Treat figshare as experimental: on a network it dislikes,
+no retry helps.
 
 If you know your network gets through, `--retry-403 0` skips the retries
 entirely and makes every 403 final on the first answer.
@@ -181,6 +208,7 @@ honest way to test this code path.
 
 ## Getting involved
 
+- **Stuck on something** → [docs/troubleshooting.md](docs/troubleshooting.md) first; it is short and indexed by symptom
 - **Usage questions** → [Discussions](https://github.com/young-ski/acadfetch/discussions)
 - **Bugs** → the bug template; say whether `verify` reports `MISMATCH`
 - **Security** (bad bytes, path escapes, token leaks) → [`SECURITY.md`](SECURITY.md), privately
@@ -188,6 +216,8 @@ honest way to test this code path.
 
 ## Known limits
 
+- Figshare is experimental: its API answers 403 from networks its WAF dislikes,
+  and no retry fixes that. Zenodo, arXiv and direct URLs are the supported paths.
 - Tokens come from the environment only; no interactive `login` flow and no
   per-file token refresh.
 - No search/pagination; you bring the target.
