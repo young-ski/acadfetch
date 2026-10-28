@@ -17,7 +17,7 @@ from pathlib import Path
 
 from . import auth, consts, manifest, naming
 from .client import Client
-from .downloader import Options, check_total, fetch_record, human
+from .downloader import Options, check_disk, check_total, fetch_record, human
 from .errors import AcFError, PartialError, TargetError
 from .progress import Progress
 from .sources import doi, registry
@@ -257,6 +257,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
         max_bytes=args.max_size,
         progress=progress,
+        fsync=not args.no_fsync,
     )
 
     if args.dry_run:
@@ -266,6 +267,11 @@ def cmd_fetch(args: argparse.Namespace) -> int:
             return EXIT_FAIL
         if args.max_size:
             check_total(replace(record, files=chosen), args.max_size)
+        try:
+            free, needed = check_disk(chosen, out_dir)
+        except OSError:  # a filesystem that will not say; not worth failing for
+            free = needed = 0
+        disk = {"free": free, "needed": needed, "ok": not needed or free >= needed}
         if args.json:
             doc["files"] = [
                 {
@@ -281,11 +287,17 @@ def cmd_fetch(args: argparse.Namespace) -> int:
                 }
                 for f in chosen
             ]
+            doc["disk"] = disk
             doc["summary"] = {"total": len(chosen), "downloaded": 0, "skipped": 0, "failed": 0}
             doc["elapsed_s"] = round(time.monotonic() - started, 3)
             _emit(doc)
             return EXIT_OK
         print(f"would write to {out_dir}")
+        if needed:
+            print(
+                f"disk    : {human(needed)} needed, {human(free)} free"
+                + ("" if disk["ok"] else "  NOT ENOUGH")
+            )
         for file in chosen:
             print(f"  would fetch {naming.sanitize(file.name)} ({human(file.size)})")
         return EXIT_OK
@@ -466,6 +478,11 @@ def build_parser() -> argparse.ArgumentParser:
     fetch.add_argument("--manifest-out", help="also write the manifest here")
     fetch.add_argument("-n", "--dry-run", action="store_true", help="list what would be fetched")
     fetch.add_argument("-q", "--quiet", action="store_true", help="no progress line")
+    fetch.add_argument(
+        "--no-fsync",
+        action="store_true",
+        help="skip the flush before each rename (faster, weaker against a power cut)",
+    )
     fetch.add_argument(
         "--json",
         action="store_true",

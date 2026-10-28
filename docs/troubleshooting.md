@@ -54,6 +54,15 @@ acadfetch fetch … --header "Authorization: Bearer …"
 
 A captive portal also breaks every other host; log in and rerun.
 
+## `needs 41 GiB but 12 GiB is free`
+
+A pre-flight refusal, before a single byte is fetched. Only the remainder counts,
+so an interrupted run needs far less than the record; if this fires on a resume,
+something else filled the disk.
+
+Free space, or point `-o` at another volume. `--no-fsync` does not help here (it
+trades durability, not size). Emptying the recycle bin is often the whole fix.
+
 ## `verify` says `MISMATCH`
 
 The file on disk is not the file the manifest recorded -- edited, truncated, or

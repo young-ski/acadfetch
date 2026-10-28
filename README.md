@@ -127,6 +127,11 @@ checksum matches, so an interrupted or failed run never leaves something that
 it resumes. `acadfetch-out/` is worth adding to a project's `.gitignore`; this
 repository already has it.
 
+A run that cannot fit is refused before the first request, naming the shortfall:
+`needs 41.2 GiB but 12.0 GiB is free`. What is already on disk is subtracted, so
+a resume is judged on the remainder. Each finished file is flushed before its
+rename (`--no-fsync` skips that; it is faster and weaker against a power cut).
+
 Exit codes: `0` success, `1` failure, `2` partial, `130` interrupted (rerun to resume).
 
 ## Tokens

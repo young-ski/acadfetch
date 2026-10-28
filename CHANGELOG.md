@@ -31,6 +31,13 @@ pre-1.0: a minor bump may break a flag.
 
 ### Added
 
+- A run that cannot fit is refused before the first request (`reason="disk"`),
+  naming the shortfall and keeping 64 MiB spare. What is already on disk is
+  subtracted, so a resume is judged on its remainder instead of the whole record.
+  A dry run reports free space and marks a shortfall instead of failing.
+- Each finished file is flushed before the rename, so the rename cannot outrun
+  the bytes. `--no-fsync` turns it off for speed.
+
 - `fetch --json` and `verify --json` print one report document to stdout and
   send progress to stderr, so `jq` sees JSON and nothing else. Exit codes are
   unchanged, an early failure still yields a document with `error`, and a failed

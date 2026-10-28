@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import random
+import shutil
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -79,6 +81,8 @@ class Options:
     verify_only: bool = False
     #: Set by :func:`fetch_record` when a Ctrl-C cut the run short.
     interrupted: bool = False
+    #: Flush each finished ``.part`` to the platter before it is renamed.
+    fsync: bool = True
 
 
 # Live responses, so an interrupt can abort a read that is blocked on a socket
@@ -303,6 +307,12 @@ def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Opt
                             f"refused locally: over --max-size ({human(opts.max_bytes)})",
                             reason="max-size",
                         )
+                if opts.fsync:
+                    # The rename below is atomic, but only against crashes that
+                    # leave the page cache intact. This is what makes the bytes
+                    # survive a power cut before they get a name.
+                    fh.flush()
+                    os.fsync(fh.fileno())
         finally:
             with _LIVE_LOCK:
                 _LIVE.discard(resp)
@@ -311,6 +321,49 @@ def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Opt
     if resumed:
         return written
     return written
+
+
+DISK_MARGIN = 64 * 1024 * 1024
+
+
+def _existing(path: Path) -> Path:
+    """The nearest directory that is there yet -- ``-o`` is created later."""
+    for candidate in (path, *path.parents):
+        if candidate.is_dir():
+            return candidate
+    return path
+
+
+def check_disk(files, out: Path, *, margin: int = DISK_MARGIN) -> tuple[int, int]:  # noqa: ANN001
+    """Refuse a run that cannot fit, before it spends a night on 97% of it.
+
+    Returns ``(free, needed)``. Only files with a published size can be counted;
+    one unknown size makes the total a lower bound, which is still worth
+    checking. Files already complete or partly fetched are subtracted -- a
+    resumed run needs the remainder, not the whole record again.
+    """
+    needed = 0
+    for file in files:
+        if file.size is None:
+            continue
+        name = naming.sanitize(file.name)
+        final = out / name
+        part = out / (name + ".part")
+        if final.exists():
+            continue
+        needed += file.size - (part.stat().st_size if part.exists() else 0)
+    if needed <= 0:
+        return (0, 0)
+    free = shutil.disk_usage(_existing(out)).free
+    if free < needed + margin:
+        raise HttpError(
+            0,
+            str(out),
+            f"needs {human(needed)} but {human(free)} is free in {out} "
+            f"(keeps {human(margin)} spare; free space or choose -o)",
+            reason="disk",
+        )
+    return (free, needed)
 
 
 def fetch_file(client: Client, file: File, opts: Options, taken: set[str]) -> Result:
@@ -494,6 +547,8 @@ def _fetch_record(
 
     if opts.max_bytes:
         check_total(record, opts.max_bytes)
+    if not opts.dry_run:
+        check_disk(files, opts.out)
 
     taken: set[str] = set()
     lock = threading.Lock()

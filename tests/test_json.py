@@ -153,3 +153,13 @@ def test_verify_json_flags_a_tampered_file(capsys, tmp_path):
     assert doc["summary"] == {"total": 1, "ok": 0, "bad": 1, "ok_run": False}
     assert doc["rows"][0]["status"] == "MISMATCH"
     assert doc["root"] == str(tmp_path)
+
+
+def test_dry_run_reports_disk_headroom(served, capsys, tmp_path):
+    code, out, _ = _run(capsys, "fetch", "zenodo:1", "-n", "--json", "-o", tmp_path)
+
+    disk = json.loads(out)["disk"]
+    assert code == cli.EXIT_OK
+    assert disk["needed"] == len(PAYLOAD) + 6
+    assert disk["free"] > disk["needed"]
+    assert disk["ok"] is True
