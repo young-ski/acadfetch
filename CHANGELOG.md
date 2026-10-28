@@ -29,6 +29,17 @@ pre-1.0: a minor bump may break a flag.
 - `-n` prints the directory it would write to, which is how the default
   `acadfetch-out/` stops being a surprise.
 
+### Tests
+
+- The fault-injecting HTTP server moved to `tests/conftest.py` and gained
+  `answers_416` and a recorded `Range` log, so a new adapter's tests are a
+  fixture away instead of a hundred lines of private class.
+- Four paths that only a human could check before are now deterministic: a real
+  delivered `SIGINT` mid-read, `416` on a complete part, a stale sidecar URL, and
+  a `.part` larger than the file.
+- An interrupt now reports the bytes it kept and the file they are in, and stops
+  the run instead of moving to the next file.
+
 ### CI
 
 - CI and the release called two hand-copied gate lists, and they had already

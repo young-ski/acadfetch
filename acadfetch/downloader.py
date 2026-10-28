@@ -343,6 +343,21 @@ def fetch_file(client: Client, file: File, opts: Options, taken: set[str]) -> Re
         res = _attempt(client, file, part, meta_path, final, opts, resumed_from)
         res.name = name
         return res
+    except KeyboardInterrupt:
+        # Raise inside a read on the main thread: the bytes already paid for are
+        # worth reporting, and the run has to stop rather than move to the next
+        # file.
+        _STOP.set()
+        opts.interrupted = True
+        kept = _kept_bytes(part)
+        return Result(
+            file=file,
+            state="failed",
+            error="interrupted",
+            bytes=kept,
+            part=str(part) if kept else None,
+            name=name,
+        )
     finally:
         if progress:
             progress.stop(name)
@@ -488,9 +503,12 @@ def _fetch_record(
             try:
                 results.append(fetch_file(client, file, opts, taken))
             except KeyboardInterrupt:
+                # Raised between files rather than inside a read.
                 opts.interrupted = True
                 _STOP.set()
                 results.append(Result(file=file, state="failed", error="interrupted"))
+                break
+            if opts.interrupted:
                 break
         return _in_record_order(results, record)
 
