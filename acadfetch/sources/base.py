@@ -46,6 +46,9 @@ class Result:
     resumed_from: int = 0
     #: Set when a failed transfer left a resumable ``.part`` behind.
     part: str | None = None
+    #: The name actually used on disk, which may differ from ``file.name`` once
+    #: duplicates are resolved. The manifest records this one.
+    name: str | None = None
 
     @property
     def ok(self) -> bool:

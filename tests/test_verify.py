@@ -56,3 +56,14 @@ def test_matches_none_when_unverifiable(tmp_path):
 def test_describe_truncates():
     assert verify.describe(f"sha256:{SHA}").startswith("sha256:")
     assert verify.describe(None) == "no published checksum"
+
+
+def test_reason_names_the_promise_not_just_the_verdict():
+    """`verified: null` must say *why* it could not check."""
+    from acadfetch import verify
+
+    assert verify.reason(None, None) == "no-checksum-published"
+    assert verify.reason("md5:nothex", None) == "unparseable-checksum"
+    assert verify.reason("md5:" + "0" * 32, True) == "matched-md5"
+    assert verify.reason("md5:" + "0" * 32, False) == "mismatch"
+    assert verify.reason("md5:" + "0" * 32, None) == "unchecked"

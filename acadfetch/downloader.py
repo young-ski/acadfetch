@@ -277,17 +277,20 @@ def fetch_file(client: Client, file: File, opts: Options, taken: set[str]) -> Re
                 path=str(final),
                 bytes=final.stat().st_size,
                 verified=verdict,
+                name=name,
             )
 
     if opts.dry_run:
-        return Result(file=file, state="skipped", path=str(final), verified=None)
+        return Result(file=file, state="skipped", path=str(final), verified=None, name=name)
 
     resumed_from = part.stat().st_size if part.exists() else 0
     progress = opts.progress
     if progress:
         progress.start(name, file.size)
     try:
-        return _attempt(client, file, part, meta_path, final, opts, resumed_from)
+        res = _attempt(client, file, part, meta_path, final, opts, resumed_from)
+        res.name = name
+        return res
     finally:
         if progress:
             progress.stop(name)

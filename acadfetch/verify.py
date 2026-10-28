@@ -62,3 +62,22 @@ def describe(checksum: str | None) -> str:
     if parsed is None:
         return "no published checksum"
     return f"{parsed[0]}:{parsed[1][:12]}…"
+
+
+def reason(checksum: str | None, verdict: bool | None) -> str:
+    """A stable, machine-readable note beside ``verified``.
+
+    ``verified: null`` on its own cannot tell "the repository published nothing"
+    from "it published something we could not parse", and those are different
+    promises to a reader.
+    """
+    if not checksum:
+        return "no-checksum-published"
+    parsed = parse(checksum)
+    if parsed is None:
+        return "unparseable-checksum"
+    if verdict is False:
+        return "mismatch"
+    if verdict is True:
+        return f"matched-{parsed[0]}"
+    return "unchecked"

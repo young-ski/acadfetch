@@ -341,3 +341,11 @@ def test_interrupt_exits_130_and_still_writes_the_manifest(monkeypatch, capsys, 
     assert "interrupted - partial files kept" in printed.err
     assert "interrupted" in printed.out
     assert (out / "manifest.json").exists()
+
+
+def test_verify_warns_that_a_schema_1_manifest_can_mislead(tmp_path, capsys):
+    _manifest(tmp_path, [_good_entry(tmp_path)], schema=1)
+    assert cli.main(["verify", str(tmp_path / "data" / "manifest.json")]) == 0
+    captured = capsys.readouterr()
+    assert "schema 1" in captured.err
+    assert "1/1 ok" in captured.out

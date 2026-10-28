@@ -6,6 +6,15 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
+### Changed
+
+- `manifest.json` is schema 2. It records the file name **on disk** rather than
+  the repository's name, so a record with two files of the same name no longer
+  produces a manifest that reports MISMATCH on correct bytes, and it carries
+  `verified_reason` so `verified: null` distinguishes "no checksum published"
+  from "published but unparseable". Schema 1 still reads and `verify` warns
+  about it.
+
 ### Fixed
 
 - A single 1 s gap in a response body ended the transfer: `socket.SocketIO`

@@ -83,3 +83,70 @@ def test_verify_manifest_reports_missing(tmp_path):
     manifest.write(mp, manifest.build(rec, []))
     (tmp_path / "a.csv").unlink()
     assert manifest.verify_manifest(mp, tmp_path)[0]["status"] == "missing"
+
+
+def test_two_files_with_one_name_keep_distinct_rows(tmp_path):
+    """Schema 2 records the name on disk, so a deduplicated pair still verifies."""
+    (tmp_path / "a.csv").write_bytes(b"one")
+    (tmp_path / "a (2).csv").write_bytes(b"two")
+    rec = Record(
+        source="direct",
+        target="t",
+        files=[File("https://example/a.csv", "a.csv"), File("https://example/dup/a.csv", "a.csv")],
+    )
+    results = [
+        Result(rec.files[0], "downloaded", path=str(tmp_path / "a.csv"), bytes=3, name="a.csv"),
+        Result(
+            rec.files[1], "downloaded", path=str(tmp_path / "a (2).csv"), bytes=3, name="a (2).csv"
+        ),
+    ]
+    mp = tmp_path / "m.json"
+    manifest.write(mp, manifest.build(rec, results))
+    assert [e["name"] for e in manifest.load(mp)["files"]] == ["a.csv", "a (2).csv"]
+    assert [r["status"] for r in manifest.verify_manifest(mp, tmp_path)] == ["ok", "ok"]
+
+
+def test_duplicate_urls_pair_by_file_not_by_url(tmp_path):
+    """Two entries sharing one URL must not collapse into the same result."""
+    import hashlib
+
+    (tmp_path / "a.bin").write_bytes(b"a")
+    (tmp_path / "b.bin").write_bytes(b"b")
+    rec = Record(
+        source="direct",
+        target="t",
+        files=[File("https://example/same", "a.bin"), File("https://example/same", "b.bin")],
+    )
+    results = [
+        Result(rec.files[0], "downloaded", path=str(tmp_path / "a.bin"), bytes=1, name="a.bin"),
+        Result(rec.files[1], "downloaded", path=str(tmp_path / "b.bin"), bytes=1, name="b.bin"),
+    ]
+    digests = [e["sha256"] for e in manifest.build(rec, results)["files"]]
+    assert digests == [hashlib.sha256(b"a").hexdigest(), hashlib.sha256(b"b").hexdigest()]
+
+
+def test_verified_reason_separates_the_two_kinds_of_null():
+    rec = Record(source="zenodo", target="t", files=[File("https://example/a", "a")])
+    unchecked = manifest.build(rec, [])["files"][0]
+    assert unchecked["verified"] is None
+    assert unchecked["verified_reason"] == "no-checksum-published"
+
+    rec.files[0].checksum = "md5:not-hex"
+    assert manifest.build(rec, [])["files"][0]["verified_reason"] == "unparseable-checksum"
+
+
+def test_schema_1_is_still_read_and_can_be_flagged(tmp_path):
+    import hashlib
+
+    (tmp_path / "a.csv").write_bytes(b"a")
+    path = tmp_path / "m.json"
+    path.write_text(
+        json.dumps(
+            {"schema": 1, "files": [{"name": "a.csv", "sha256": hashlib.sha256(b"a").hexdigest()}]}
+        ),
+        "utf-8",
+    )
+    assert manifest.peek_schema(path) == 1
+    assert manifest.load(path)["schema"] == 1
+    assert manifest.verify_manifest(path, tmp_path)[0]["status"] == "ok"
+    assert manifest.peek_schema(tmp_path / "absent.json") is None

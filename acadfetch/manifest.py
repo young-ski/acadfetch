@@ -17,12 +17,19 @@ from .auth import Token
 from .errors import ManifestError
 from .sources.base import Record, Result
 
-SCHEMA = 1
+SCHEMA = 2
+#: Schema 1 is still read: a manifest is a document someone can hand you, and
+#: the fix that made 2 necessary must not orphan the ones already written.
+READABLE = (1, SCHEMA)
+SCHEMA_1_NOTE = (
+    "note: schema 1 records the repository's name, not the name on disk; "
+    "a duplicate name can report MISMATCH on correct bytes"
+)
 _WINDOWS_ABS = re.compile(r"^[A-Za-z]:[\\/]")
 
 
 def build(record: Record, results: list[Result], token: Token | None = None) -> dict:
-    by_url = {r.file.url: r for r in results}
+    by_file = {id(r.file): r for r in results}
     return {
         "schema": SCHEMA,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -37,19 +44,22 @@ def build(record: Record, results: list[Result], token: Token | None = None) -> 
         "landing": record.landing,
         # Provenance only: the variable name and a tail, never the secret.
         "auth": {"env": token.env, "hint": token.hint} if token else None,
-        "files": [
-            {
-                "name": naming.sanitize(f.name),
-                "url": f.url,
-                "size": f.size,
-                "checksum": f.checksum,
-                "sha256": _sha256(by_url.get(f.url)),
-                "bytes": by_url[f.url].bytes if f.url in by_url else 0,
-                "state": by_url[f.url].state if f.url in by_url else "missing",
-                "verified": by_url[f.url].verified if f.url in by_url else None,
-            }
-            for f in record.files
-        ],
+        "files": [_entry(f, by_file.get(id(f))) for f in record.files],
+    }
+
+
+def _entry(f, result: Result | None) -> dict:  # noqa: ANN001
+    """One manifest row. ``name`` is what landed on disk, not what was asked for."""
+    return {
+        "name": (result.name if result and result.name else naming.sanitize(f.name)),
+        "url": f.url,
+        "size": f.size,
+        "checksum": f.checksum,
+        "sha256": _sha256(result),
+        "bytes": result.bytes if result else 0,
+        "state": result.state if result else "missing",
+        "verified": result.verified if result else None,
+        "verified_reason": verify.reason(f.checksum, result.verified if result else None),
     }
 
 
@@ -93,7 +103,7 @@ def load(path: Path) -> dict:
         raise ManifestError(f"{path} is not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise ManifestError(f"{path} is not a manifest object")
-    if data.get("schema") != SCHEMA:
+    if data.get("schema") not in READABLE:
         raise ManifestError(f"unsupported manifest schema in {path}: {data.get('schema')!r}")
     if not isinstance(data.get("files"), list):
         raise ManifestError(f"{path} has no files list")
@@ -115,6 +125,16 @@ def _leaves_root(root: Path, name: str) -> bool:
     except ValueError:
         return True
     return False
+
+
+def peek_schema(path: Path) -> int | None:
+    """The schema of a manifest, without shaping it; ``None`` if unreadable."""
+    try:
+        data = json.loads(atomic.read_text(path))
+    except (OSError, ValueError):
+        return None
+    value = data.get("schema") if isinstance(data, dict) else None
+    return value if isinstance(value, int) else None
 
 
 def verify_manifest(path: Path, root: Path, allow_escape: bool = False) -> list[dict]:

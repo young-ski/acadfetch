@@ -107,15 +107,23 @@ Every completed run writes `manifest.json`:
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "doi": "10.5281/zenodo.123456",
   "license": "cc-by-4.0",
   "files": [
     { "name": "raw.tar.gz", "size": 8123, "checksum": "md5:9f2c…",
-      "sha256": "b41d…", "state": "downloaded", "verified": true }
+      "sha256": "b41d…", "state": "downloaded",
+      "verified": true, "verified_reason": "matched-md5" }
   ]
 }
 ```
+
+`name` is the file *on disk*, which can differ from the repository's name when two
+files collide. `verified_reason` separates the two kinds of `verified: null`:
+`no-checksum-published` (arXiv) from `unparseable-checksum` (a repository that
+published something we cannot name an algorithm for). Schema 1 manifests still
+read, and `verify` says so, because their names were recorded before duplicates
+were resolved.
 
 `acadfetch verify` recomputes SHA-256 for each entry and exits non-zero on any
 mismatch or missing file. Commit the manifest next to your analysis; it is what

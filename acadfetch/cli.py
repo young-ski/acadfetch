@@ -195,6 +195,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
     # Names in a manifest are relative to the directory it was written into.
     # Defaulting to the cwd made the README's own example fail.
     root = Path(args.root) if args.root else manifest_path.parent
+    if manifest.peek_schema(manifest_path) == 1:
+        print(manifest.SCHEMA_1_NOTE, file=sys.stderr)
     rows = manifest.verify_manifest(manifest_path, root, allow_escape=args.allow_escape)
     bad = sum(1 for row in rows if row["status"] != "ok")
     for row in rows:
