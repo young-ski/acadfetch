@@ -8,8 +8,10 @@ about bytes on disk. These are the interesting bugs:
 - a crafted filename or manifest that writes outside the output directory;
 - a transfer that reaches a "complete" file whose bytes are wrong (lying
   `Content-Length`, ignored `Range`, unvalidated `206` offset);
-- a token sent to a host that has no business seeing it, or a token leaking
-  into `manifest.json` / stdout beyond the last four characters;
+- a token sent to a host that has no business seeing it -- including on a
+  redirect hop, or added to a presigned URL that already carries its own
+  credentials -- or a token leaking into `manifest.json` / stdout beyond the last
+  four characters;
 - anything that makes `verify` report `ok` for bytes that do not match.
 
 Out of scope: vulnerabilities in the repositories themselves, missing HTTP

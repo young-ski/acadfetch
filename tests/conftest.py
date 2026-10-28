@@ -31,6 +31,13 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         cfg["hits"][path] = cfg["hits"].get(path, 0) + 1
         cfg["ranges"].append(self.headers.get("Range"))
+        cfg["auth_seen"].append(self.headers.get("Authorization"))
+        if path in cfg["redirects"]:
+            self.send_response(302)
+            self.send_header("Location", cfg["redirects"][path])
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if cfg["answers_416"] and self.headers.get("Range"):
             self.send_response(416)
             self.send_header("Content-Range", f"bytes */{len(cfg['files'].get(path, b''))}")
@@ -108,8 +115,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
 
 
-@pytest.fixture
-def server():
+def _new_server():
     srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     srv.cfg = {
         "files": {},
@@ -127,10 +133,38 @@ def server():
         "ranges": [],
         "stall_after": None,
         "stall_for": 2.0,
+        "auth_seen": [],
+        "redirects": {},
     }
+
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
     srv.base = f"http://127.0.0.1:{srv.server_address[1]}"
-    yield srv
+    return srv
+
+
+def _stop(srv) -> None:  # noqa: ANN001
     srv.shutdown()
     srv.server_close()
+
+
+@pytest.fixture
+def server():
+    srv = _new_server()
+    yield srv
+    _stop(srv)
+
+
+@pytest.fixture
+def make_server():
+    """A second (or third) server, for redirects that leave the origin."""
+    made = []
+
+    def factory():
+        srv = _new_server()
+        made.append(srv)
+        return srv
+
+    yield factory
+    for srv in made:
+        _stop(srv)

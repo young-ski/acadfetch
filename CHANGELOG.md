@@ -29,6 +29,15 @@ pre-1.0: a minor bump may break a flag.
 - `-n` prints the directory it would write to, which is how the default
   `acadfetch-out/` stops being a surprise.
 
+### Security
+
+- `urllib` copies every header onto a redirect, so `ZENODO_TOKEN` followed a
+  download to whatever host the API pointed at, contradicting the README. A
+  redirect that leaves the origin now drops `Authorization`, and a presigned URL
+  (`X-Amz-Signature`) gets none to begin with, since S3 rejects a request that
+  carries both. An `https`→`http` hop is recorded on the client instead of
+  passing unnoticed.
+
 ### Tests
 
 - The fault-injecting HTTP server moved to `tests/conftest.py` and gained

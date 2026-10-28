@@ -118,7 +118,9 @@ Exit codes: `0` success, `1` failure, `2` partial, `130` interrupted (rerun to r
 
 `ZENODO_TOKEN` and `FIGSHARE_TOKEN` are read from the environment and sent only
 to that repository, so a token never travels to a host that has no business
-seeing it. `--header` still overrides, `--no-token` ignores the environment, and
+seeing it -- including across a redirect: a hop to another host (a storage CDN, a
+download mirror) goes out without it, and a presigned URL gets no
+`Authorization` at all, because S3 rejects a request that carries both. `--header` still overrides, `--no-token` ignores the environment, and
 the manifest records the variable name plus the last four characters only:
 
 ```bash

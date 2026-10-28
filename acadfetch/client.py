@@ -12,6 +12,7 @@ import json
 import random
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -52,6 +53,37 @@ def _blocked_detail(detail: str, retries: int | None) -> str:
     if detail.startswith("<"):
         return named
     return f"{detail} ({named})"
+
+
+class RedirectPolicy(urllib.request.HTTPRedirectHandler):
+    """Keep a bearer token on its own origin, and note a downgrade to http.
+
+    urllib copies every header onto the redirect, so a token issued for Zenodo
+    would travel to whatever host it points at -- and to a plain-http URL if it
+    redirects that way.
+    """
+
+    def __init__(self) -> None:
+        self.downgrades: list[tuple[str, str]] = []
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ANN201
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is None:
+            return None
+        before = urllib.parse.urlsplit(req.full_url)
+        after = urllib.parse.urlsplit(new.full_url)
+        if (before.hostname, before.port) != (after.hostname, after.port):
+            # A different origin has no business seeing this token.
+            new.remove_header("Authorization")
+        if after.scheme == "http" and before.scheme == "https":
+            self.downgrades.append((req.full_url, new.full_url))
+        return new
+
+
+def _carries_its_own_auth(url: str) -> bool:
+    """A presigned URL (S3 and friends) fails if Authorization is added."""
+    query = urllib.parse.urlsplit(url).query.lower()
+    return "x-amz-signature" in query or "x-amz-credential" in query
 
 
 def parse_retry_after(value: str | None) -> float | None:
@@ -96,6 +128,8 @@ class Client:
         # so a Zenodo token is never sent to figshare.
         self.auth = {k: dict(v) for k, v in (auth or {}).items()}
         self.source: str | None = None
+        self.redirects = RedirectPolicy()
+        self.opener = urllib.request.build_opener(self.redirects)
 
     # -- internals ---------------------------------------------------------
     def _sleep(self, attempt: int, retry_after: float | None) -> None:
@@ -111,7 +145,7 @@ class Client:
         self, url: str, headers: Mapping[str, str] | None = None
     ) -> urllib.request.Request:
         merged: dict[str, str] = {}
-        if self.source and self.source in self.auth:
+        if self.source and self.source in self.auth and not _carries_its_own_auth(url):
             merged.update(self.auth[self.source])
         merged["User-Agent"] = self.user_agent
         merged["Accept-Encoding"] = "identity"
@@ -121,7 +155,7 @@ class Client:
         return urllib.request.Request(url, headers=merged)
 
     def _open(self, req: urllib.request.Request):  # noqa: ANN202
-        return urllib.request.urlopen(req, timeout=self.timeout)
+        return self.opener.open(req, timeout=self.timeout)
 
     def _with_retries(
         self,
