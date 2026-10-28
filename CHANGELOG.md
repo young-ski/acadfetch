@@ -6,6 +6,21 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
+### Fixed
+
+- A single 1 s gap in a response body ended the transfer: `socket.SocketIO`
+  latches its first timeout and then refuses every later read, so a stall on a
+  slow or mobile link cost the whole file. The latch is cleared on each poll
+  timeout. Measured on a 1 MiB/s link with one 2 s stall: 0/3 before, 3/3 after,
+  no retries needed.
+- `IncompleteRead` from a body cut short is an `HTTPException`, not an
+  `OSError`, so it escaped the retry loop and the CLI as a traceback and took
+  the rest of the batch with it.
+- A spent retry budget deleted the `.part`, the opposite of what this README
+  and the "flaky VPN at 80%" pitch promise. The partial is kept now, its size is
+  reported instead of `0 B`, and the failure names the file so a rerun resumes.
+  Bytes that cannot be trusted -- a checksum mismatch -- are still dropped.
+
 ## [0.1.1] - 2026-10-26
 
 ### Fixed
