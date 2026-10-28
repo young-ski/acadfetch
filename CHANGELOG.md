@@ -29,6 +29,23 @@ pre-1.0: a minor bump may break a flag.
 - `-n` prints the directory it would write to, which is how the default
   `acadfetch-out/` stops being a surprise.
 
+### CI
+
+- CI and the release called two hand-copied gate lists, and they had already
+  drifted: the release ran bare `pytest` with no coverage floor, no `-W error`, no
+  `twine check` and no wheel-content assertions, under a comment claiming they
+  matched. Both now call one `gates.yml`.
+- A release is guarded: the tag must be an ancestor of `main`, it must equal the
+  packaged version, and releases serialise instead of racing the same filename.
+- `pypa/gh-action-pypi-publish` is pinned to a tag instead of the `release/v1`
+  branch, artifacts get a build-provenance attestation, and a post-publish job
+  installs the version from PyPI and resolves a real record -- so a broken wheel
+  is a red run, not a bug report.
+- The suite runs 3.10-3.15, but lint runs on one cell per OS instead of fifteen,
+  and `-W error` on one cell: the same coverage for a fraction of the minutes.
+- `docs/releasing.md` is the checklist, linked from CONTRIBUTING.
+- Dependabot watches pip and the actions weekly.
+
 ### Documentation
 
 - The usage block was four placeholders deep: two of the first three ids did not

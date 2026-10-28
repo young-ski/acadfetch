@@ -1,0 +1,24 @@
+version: 2
+
+# Nothing is pinned to a SHA yet, so the next break will come from the toolchain
+# rather than from the code. This is where it gets noticed.
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      test-tools:
+        patterns: ["pytest*", "ruff", "coverage*"]
+      build-tools:
+        patterns: ["build", "twine", "setuptools*", "wheel"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns: ["*"]

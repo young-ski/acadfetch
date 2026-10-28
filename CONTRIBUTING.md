@@ -58,8 +58,9 @@ find out immediately.
 ## Review
 
 Releases happen on demand, so review is not on a clock; expect a first reply
-within about a week, sooner for anything touching bytes or tokens. Security
-reports go through [`SECURITY.md`](SECURITY.md), not the issue tracker.
+within about a week, sooner for anything touching bytes or tokens. The
+checklist is [docs/releasing.md](docs/releasing.md). Security reports go
+through [`SECURITY.md`](SECURITY.md), not the issue tracker.
 
 ## Tests
 

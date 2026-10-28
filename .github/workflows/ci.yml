@@ -1,9 +1,13 @@
 name: CI
 
+# The gates themselves live in gates.yml, so the release calls exactly these.
+
 on:
   push:
     branches: [main]
+    paths-ignore: ["**/*.md", "docs/**"]
   pull_request:
+    paths-ignore: ["**/*.md", "docs/**"]
 
 permissions:
   contents: read
@@ -13,80 +17,5 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
-    # macOS is best effort: it runs, a failure is a real bug, but it does not
-    # hold a release. Linux and Windows are the supported pair.
-    continue-on-error: ${{ matrix.optional || false }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-        python: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
-        include:
-          - os: macos-latest
-            python: "3.12"
-            optional: true
-          - os: macos-latest
-            python: "3.14"
-            optional: true
-          - os: macos-latest
-            python: "3.15"
-            optional: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-      - run: python -m pip install -e . pytest pytest-cov ruff
-      - name: Lint
-        run: |
-          ruff check .
-          ruff format --check .
-      - name: Test
-        # The floor stops a PR from gutting a test body and staying green.
-        run: pytest -q --cov=acadfetch --cov-fail-under=85
-      - name: Warnings are errors where they can be
-        # -W error, not error::ResourceWarning: pytest re-emits unraisable
-        # warnings under its own category, so the narrow filter does not fail.
-        run: python -X dev -W error -m pytest -q
-
-  build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: python -m pip install build twine
-      - run: python -m build
-      - name: Metadata and contents
-        run: |
-          python -m twine check dist/*
-          python - <<'PY'
-          import glob, tarfile, zipfile
-
-          wheel = glob.glob("dist/*.whl")[0]
-          names = zipfile.ZipFile(wheel).namelist()
-          assert not [n for n in names if n.startswith("tests/")], "tests leaked into the wheel"
-          assert "acadfetch/py.typed" in names, "py.typed missing from the wheel"
-          assert [n for n in names if "licenses/LICENSE" in n], "LICENSE missing from dist-info"
-          assert not [n for n in names if n.endswith((".part", ".part.meta.json"))]
-
-          sdist = glob.glob("dist/*.tar.gz")[0]
-          archived = tarfile.open(sdist).getnames()
-          assert [n for n in archived if "tests/fixtures/" in n], "fixtures missing from the sdist"
-          print(f"wheel: {len(names)} entries, sdist: {len(archived)} entries, both as expected")
-          PY
-      - name: Installs with no dependencies pulled in
-        run: |
-          python -m venv /tmp/bare
-          /tmp/bare/bin/python -m pip install --no-deps --no-index dist/*.whl
-          /tmp/bare/bin/python -c "import acadfetch, sys; print(acadfetch.__name__, sys.version.split()[0])"
-          /tmp/bare/bin/acadfetch --version
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: dist/
+  gates:
+    uses: ./.github/workflows/gates.yml

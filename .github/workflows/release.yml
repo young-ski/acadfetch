@@ -1,10 +1,11 @@
 name: Release
 
 # Publishing is OIDC-only: no PyPI token lives in this repository. PyPI trusts
-# this exact workflow + environment pair, and the job below proves its identity
+# this exact workflow + environment pair, and the publish job proves its identity
 # with a short-lived id-token instead of a password.
 #
-# Cut a release with: git tag v0.1.0 && git push origin v0.1.0
+# Cut a release with: git tag v0.1.2 && git push origin v0.1.2
+# The tag must be on main and must match `version` in pyproject.toml.
 
 on:
   push:
@@ -14,54 +15,92 @@ on:
 permissions:
   contents: read
 
+# Two tags pushed together used to race the same PyPI filename.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  build:
+  # The same gates a PR runs, not a second copy of them: the copy had already
+  # drifted (bare `pytest` here, coverage floor and -W error there).
+  gates:
+    uses: ./.github/workflows/gates.yml
+
+  guard:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: startsWith(github.ref, 'refs/tags/')
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-
-      # A release must not ship what CI has not seen. Same gate, same commands.
-      - run: python -m pip install -e . pytest ruff
-      - name: Lint
+          fetch-depth: 0
+      - name: The tag is on main
         run: |
-          ruff check .
-          ruff format --check .
-      - name: Test
-        run: pytest -q
-
-      - name: Tag matches the packaged version
-        if: startsWith(github.ref, 'refs/tags/')
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
+      - name: The tag matches the packaged version
         run: |
           version=$(python -c "import re, pathlib; \
             print(re.search(r'^version = \"(.+)\"', pathlib.Path('pyproject.toml').read_text(), re.M).group(1))")
           echo "tag ${GITHUB_REF_NAME} vs version ${version}"
           test "v${version}" = "${GITHUB_REF_NAME}"
 
-      - run: python -m pip install build
-      - run: python -m build
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: dist/
-
   publish:
-    needs: build
+    needs: [gates, guard]
+    # A skipped `needs` would otherwise skip this too, which would make
+    # workflow_dispatch useless.
+    if: >-
+      always() && needs.gates.result == 'success'
+      && (needs.guard.result == 'success' || needs.guard.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # Must match the environment name registered on PyPI's trusted publisher.
     environment:
       name: pypi
       url: https://pypi.org/p/acadfetch
     permissions:
       id-token: write # the OIDC token PyPI accepts
+      attestations: write # the provenance record below
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist/
 
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Say what is about to be uploaded
+        run: ls -l dist/ && sha256sum dist/*
+
+      - name: Attach a provenance record to the artifacts
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "dist/*"
+
+      # Pinned to a tag rather than `@release/v1`, which is a moving branch.
+      - uses: pypa/gh-action-pypi-publish@v1.12.4
+        with:
+          skip-existing: false
+
+  # A bad release used to be detectable only by a user complaint.
+  smoke:
+    needs: publish
+    if: always() && needs.publish.result == 'success' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the published version, from PyPI
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for attempt in 1 2 3 4 5; do
+            python -m pip install --no-cache-dir "acadfetch==${version}" && break
+            echo "not on the index yet ($attempt), waiting"
+            sleep 15
+          done
+          python -m pip install --no-cache-dir "acadfetch==${version}"
+      - name: It runs, and it can resolve a real record
+        run: |
+          acadfetch --version
+          acadfetch sources
+          acadfetch fetch arxiv:1706.03762 -n
