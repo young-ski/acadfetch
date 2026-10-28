@@ -446,7 +446,9 @@ def _attempt(
             return Result(file=file, state="failed", error=f"re-download failed: {exc}{_hint(exc)}")
         if verdict is False:
             _drop(part, meta_path)
-            return Result(file=file, state="failed", error="checksum mismatch")
+            # verified=False is what makes the mismatch legible downstream, not
+            # only in the sentence.
+            return Result(file=file, state="failed", error="checksum mismatch", verified=False)
 
     atomic.replace(part, final)
     _drop(meta_path)

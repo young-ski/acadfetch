@@ -29,6 +29,16 @@ pre-1.0: a minor bump may break a flag.
 - `-n` prints the directory it would write to, which is how the default
   `acadfetch-out/` stops being a surprise.
 
+### Added
+
+- `fetch --json` and `verify --json` print one report document to stdout and
+  send progress to stderr, so `jq` sees JSON and nothing else. Exit codes are
+  unchanged, an early failure still yields a document with `error`, and a failed
+  transfer names the `part` file it kept. `report` versions the shape; fields are
+  append-only.
+- A checksum mismatch sets `verified: false` instead of leaving it `null`, which
+  is also what makes the human `[CHECKSUM MISMATCH]` marker appear.
+
 ### Security
 
 - `urllib` copies every header onto a redirect, so `ZENODO_TOKEN` followed a

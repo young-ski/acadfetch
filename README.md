@@ -97,7 +97,22 @@ acadfetch sources                              # adapters, with an example each
 ```
 
 `10.5281/zenodo.123456`, `zenodo:123456`, `figshare:987654` and `arxiv:2401.12345`
-are placeholders; use any real id. `figshare` needs a network its WAF likes --
+are placeholders; use any real id.
+
+### In a pipeline
+
+`--json` puts one report document on stdout and moves progress to stderr, so the
+two never interleave:
+
+```bash
+acadfetch fetch zenodo:123456 --json | jq -r '.files[] | select(.state=="failed") | .name'
+```
+
+Exit codes are unchanged, and a failure before any transfer still produces a
+document with `error` set. `report` is the document's schema version: fields are
+added, never removed or given a new meaning. `verify --json` reports per-file
+`MISMATCH` rows the same way. At the end of a failed transfer, `part` names the
+`.part` file that was kept, so a retry can resume instead of starting over. `figshare` needs a network its WAF likes --
 see [docs/troubleshooting.md](docs/troubleshooting.md) if it answers 403.
 
 Progress is one aggregate line for the whole run

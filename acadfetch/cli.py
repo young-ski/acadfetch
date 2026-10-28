@@ -7,9 +7,12 @@ target was unusable, 2 partial success, 130 interrupted (partials are kept).
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
+import time
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import auth, consts, manifest, naming
@@ -18,8 +21,11 @@ from .downloader import Options, check_total, fetch_record, human
 from .errors import AcFError, PartialError, TargetError
 from .progress import Progress
 from .sources import doi, registry
+from .verify import reason as verify_reason
 
 EXIT_OK, EXIT_FAIL, EXIT_PARTIAL, EXIT_INTERRUPT = 0, 1, 2, 130
+#: Bumped only when a field changes meaning or disappears. New fields do not.
+REPORT_SCHEMA = 1
 EXAMPLES = {
     "zenodo": "zenodo:123456",
     "figshare": "figshare:987654",
@@ -160,6 +166,45 @@ def cmd_manifest(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _report(args: argparse.Namespace) -> dict:
+    """The envelope every ``--json`` document starts from."""
+    return {
+        "tool": {"name": "acadfetch", "version": consts.__version__},
+        "report": REPORT_SCHEMA,
+        "command": getattr(args, "command", ""),
+        "started_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "error": None,
+    }
+
+
+def _file_row(row) -> dict:  # noqa: ANN001
+    return {
+        "name": naming.sanitize(row.name or row.file.name),
+        "size": row.file.size,
+        "bytes": row.bytes,
+        "state": row.state,
+        "verified": row.verified,
+        "verified_reason": verify_reason(row.file.checksum, row.verified),
+        "resumed_from": row.resumed_from,
+        "part": Path(row.part).name if row.part else None,
+        "error": row.error,
+    }
+
+
+def _emit_error(args: argparse.Namespace, message: str) -> None:
+    """A ``--json`` caller gets a document even when the run died early."""
+    if not getattr(args, "json", False):
+        return
+    doc = _report(args)
+    doc["error"] = message
+    _emit(doc)
+
+
+def _emit(doc: dict) -> None:
+    # sorts nothing: the order above is the order a reader wants.
+    print(json.dumps(doc, ensure_ascii=False))
+
+
 def _print_header(record) -> None:  # noqa: ANN001
     print(f"title   : {record.title or '(untitled)'}")
     if record.doi:
@@ -183,15 +228,28 @@ def _selected(record, only: list[str] | None):  # noqa: ANN001, ANN202
 
 
 def cmd_fetch(args: argparse.Namespace) -> int:
+    started = time.monotonic()
     client = _client(args)
     record = _resolve(args, client)
-    _print_header(record)
+    doc = _report(args)
+    doc.update(
+        target=record.target,
+        source=record.source,
+        doi=record.doi,
+        license=record.license,
+        landing=record.landing,
+    )
+    if not args.json:
+        _print_header(record)
     token = _token_for(args, record)
-    if token:
+    if token and not args.json:
         print(f"auth    : token from {token}")
 
     out_dir = Path(args.out or f"acadfetch-out/{record.source}-{_slug(record)}")
-    progress = Progress(enabled=not args.quiet)
+    doc["out"] = str(out_dir)
+    doc["dry_run"] = bool(args.dry_run)
+    # Progress shares stdout with the report, so it moves to stderr under --json.
+    progress = Progress(stream=sys.stderr if args.json else None, enabled=not args.quiet)
     opts = Options(
         out=out_dir,
         concurrency=args.concurrency,
@@ -208,6 +266,25 @@ def cmd_fetch(args: argparse.Namespace) -> int:
             return EXIT_FAIL
         if args.max_size:
             check_total(replace(record, files=chosen), args.max_size)
+        if args.json:
+            doc["files"] = [
+                {
+                    "name": naming.sanitize(f.name),
+                    "size": f.size,
+                    "bytes": 0,
+                    "state": "planned",
+                    "verified": None,
+                    "verified_reason": verify_reason(f.checksum, None),
+                    "resumed_from": 0,
+                    "part": None,
+                    "error": "",
+                }
+                for f in chosen
+            ]
+            doc["summary"] = {"total": len(chosen), "downloaded": 0, "skipped": 0, "failed": 0}
+            doc["elapsed_s"] = round(time.monotonic() - started, 3)
+            _emit(doc)
+            return EXIT_OK
         print(f"would write to {out_dir}")
         for file in chosen:
             print(f"  would fetch {naming.sanitize(file.name)} ({human(file.size)})")
@@ -222,7 +299,15 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         progress.finish()
 
     failures = [r for r in results if not r.ok]
-    for row in results:
+    doc["files"] = [_file_row(r) for r in results]
+    doc["summary"] = {
+        "total": len(results),
+        "downloaded": sum(1 for r in results if r.state == "downloaded"),
+        "skipped": sum(1 for r in results if r.state == "skipped"),
+        "failed": len(failures),
+    }
+    doc["elapsed_s"] = round(time.monotonic() - started, 3)
+    for row in results if not args.json else []:
         mark = {"downloaded": "ok  ", "skipped": "skip", "failed": "FAIL"}[row.state]
         extra = ""
         if row.resumed_from:
@@ -238,50 +323,70 @@ def cmd_fetch(args: argparse.Namespace) -> int:
             print(f"     kept {human(row.bytes)} in {Path(row.part).name} - rerun to resume")
 
     data = manifest.build(record, results, token)
+    code = EXIT_OK
     try:
         manifest.write(out_dir / "manifest.json", data)
     except OSError as exc:
         # The bytes may all be on disk; losing the manifest is a partial
         # outcome, not a crash.
         print(f"acadfetch: could not write the manifest: {exc}", file=sys.stderr)
-        print(f"{len(results) - len(failures)}/{len(results)} file(s) in {out_dir}")
-        if opts.interrupted:
-            return EXIT_INTERRUPT
-        return EXIT_PARTIAL if len(results) > len(failures) else EXIT_FAIL
-    print(f"\n{len(results) - len(failures)}/{len(results)} file(s) in {out_dir}")
-    if args.manifest_out:
-        try:
-            manifest.write(Path(args.manifest_out), data)
-        except OSError as exc:
-            print(f"acadfetch: could not write {args.manifest_out}: {exc}", file=sys.stderr)
-            return EXIT_PARTIAL
+        doc["error"] = f"could not write the manifest: {exc}"
+        code = EXIT_PARTIAL if len(results) > len(failures) else EXIT_FAIL
+    else:
+        if not args.json:
+            print(f"{len(results) - len(failures)}/{len(results)} file(s) in {out_dir}")
+        if args.manifest_out:
+            try:
+                manifest.write(Path(args.manifest_out), data)
+            except OSError as exc:
+                print(f"acadfetch: could not write {args.manifest_out}: {exc}", file=sys.stderr)
+                doc["error"] = f"could not write {args.manifest_out}: {exc}"
+                code = EXIT_PARTIAL
 
-    if failures and len(failures) == len(results) and not opts.interrupted:
-        return EXIT_FAIL
     if opts.interrupted:
         # The manifest above covers whatever finished, which is the difference
         # between "a partial run you can reason about" and a bare exit 130.
         print("interrupted - partial files kept, rerun to resume", file=sys.stderr)
-        return EXIT_INTERRUPT
-    return EXIT_PARTIAL if failures else EXIT_OK
+        code = EXIT_INTERRUPT
+    elif failures and len(failures) == len(results):
+        code = EXIT_FAIL
+    elif failures:
+        code = EXIT_PARTIAL
+    doc["summary"]["ok"] = code == EXIT_OK
+    if args.json:
+        _emit(doc)
+    return code
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
+    doc = _report(args)
+    doc["manifest"] = args.manifest
     manifest_path = Path(args.manifest)
     # Names in a manifest are relative to the directory it was written into.
     # Defaulting to the cwd made the README's own example fail.
     root = Path(args.root) if args.root else manifest_path.parent
     if manifest.peek_schema(manifest_path) == 1:
         print(manifest.SCHEMA_1_NOTE, file=sys.stderr)
+    doc["root"] = str(root)
     rows = manifest.verify_manifest(manifest_path, root, allow_escape=args.allow_escape)
     bad = sum(1 for row in rows if row["status"] != "ok")
-    for row in rows:
-        print(f"{row['status']:>9} {row['name']}")
-    print(f"\n{len(rows) - bad}/{len(rows)} ok")
+    if not args.json:
+        for row in rows:
+            print(f"{row['status']:>9} {row['name']}")
+        print()
+        print(f"{len(rows) - bad}/{len(rows)} ok")
     if not args.allow_escape and any(row["status"] == "escaped" for row in rows):
         print(f"some names leave {root} - --allow-escape follows them", file=sys.stderr)
+    doc["rows"] = [
+        {k: row[k] for k in ("name", "status", "expected", "actual") if k in row} for row in rows
+    ]
+    doc["summary"] = {"total": len(rows), "ok": len(rows) - bad, "bad": bad, "ok_run": not bad}
     if not rows:
         print("the manifest lists no files", file=sys.stderr)
+        doc["error"] = "the manifest lists no files"
+    if args.json:
+        _emit(doc)
+    if not rows:
         return EXIT_FAIL
     return EXIT_FAIL if bad else EXIT_OK
 
@@ -361,6 +466,11 @@ def build_parser() -> argparse.ArgumentParser:
     fetch.add_argument("--manifest-out", help="also write the manifest here")
     fetch.add_argument("-n", "--dry-run", action="store_true", help="list what would be fetched")
     fetch.add_argument("-q", "--quiet", action="store_true", help="no progress line")
+    fetch.add_argument(
+        "--json",
+        action="store_true",
+        help="print one JSON report to stdout, progress to stderr",
+    )
     network_flags(fetch)
     fetch.set_defaults(func=cmd_fetch)
 
@@ -381,6 +491,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="follow names that leave --root (a manifest can point outside it)",
     )
+    ver.add_argument(
+        "--json",
+        action="store_true",
+        help="print one JSON report to stdout instead of rows",
+    )
     ver.set_defaults(func=cmd_verify)
 
     src = sub.add_parser("sources", help="list supported sources")
@@ -397,19 +512,18 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     _recover_target(args)
     if getattr(args, "command", "") == "fetch" and getattr(args, "target", None) is None:
-        print(
-            "acadfetch: which record? put a target after --only, e.g. "
-            "acadfetch fetch zenodo:123456 --only raw.tar.gz",
-            file=sys.stderr,
+        message = (
+            "which record? put a target after --only, e.g. "
+            "acadfetch fetch zenodo:123456 --only raw.tar.gz"
         )
+        print(f"acadfetch: {message}", file=sys.stderr)
+        _emit_error(args, message)
         return EXIT_FAIL
     try:
         return args.func(args)
-    except TargetError as exc:
+    except AcFError as exc:  # TargetError is one
         print(f"acadfetch: {exc}", file=sys.stderr)
-        return EXIT_FAIL
-    except AcFError as exc:
-        print(f"acadfetch: {exc}", file=sys.stderr)
+        _emit_error(args, str(exc))
         return EXIT_FAIL
     except KeyboardInterrupt:
         print("\ninterrupted - partial files kept, rerun to resume", file=sys.stderr)
