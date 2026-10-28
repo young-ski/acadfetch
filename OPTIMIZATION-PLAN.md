@@ -390,3 +390,4 @@ E4/E5 照此把 `--env-id` 换成 `E4-hotspot` / `E5-vpn`，多余参数不加�
 单环境绿 = 3 次 ≥2 次通过且 3 次 verify 全 ok。2 周出口 = **5 环境 ≥4 绿** + E2 的 2 s 停顿用例 100% 通过 + `.part` 保留率 100%。
 
 **E4/E5 逐步操作手册**: [docs/first-success-runbook.md](docs/first-success-runbook.md)
+**E5（VPN）单独一册**: [docs/e5-vpn-runbook.md](docs/e5-vpn-runbook.md)
