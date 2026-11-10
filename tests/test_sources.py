@@ -6,9 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from acadfetch import verify
-from acadfetch.errors import SourceError, TargetError
-from acadfetch.sources import arxiv, direct, doi, figshare, registry, zenodo
+from acadfetch.errors import TargetError
+from acadfetch.sources import arxiv, direct, doi, registry, zenodo
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -63,8 +62,6 @@ ZENODO = {
         (zenodo, "10.5281/zenodo.42", "42"),
         (zenodo, "https://zenodo.org/records/42", "42"),
         (zenodo, "https://zenodo.org/doi/10.5281/zenodo.42", "42"),
-        (figshare, "figshare:9", "9"),
-        (figshare, "10.6084/m9.figshare.9", "9"),
         (arxiv, "2401.12345", "2401.12345"),
         (arxiv, "arxiv:2401.12345v2", "2401.12345v2"),
         (arxiv, "https://arxiv.org/abs/2401.12345", "2401.12345"),
@@ -78,7 +75,6 @@ def test_adapters_match(adapter, target, expected):
     "adapter,target",
     [
         (zenodo, "zenodo:abc"),
-        (figshare, "figshare:x"),
         (arxiv, "not-an-id"),
         (direct, "zenodo:42"),
     ],
@@ -170,84 +166,6 @@ def test_unregistered_doi_raises():
         doi.resolve(client, "10.9999/nope")
 
 
-# -- figshare, against the captured payload -------------------------------
-
-# Captured verbatim from api.figshare.com on 2026-10-25 (article 32519553, a real
-# public record); the bytes in figshare_file.pdf are the real file and hash to
-# the md5 the payload publishes.
-ARTICLE = "32519553"
-NAME = "3_Summary of Findings Across Studies_20261024_v2.pdf"
-MD5 = "bbde85208529e663141a0e8cb6fa9c4a"
-SIZE = 193410
-PDF = (FIXTURES / "figshare_file.pdf").read_bytes()
-
-
-def figshare_record(payload: dict | None = None) -> dict:
-    payload = payload if payload is not None else fixture("figshare_article.json")
-    return figshare.resolve(FakeClient({f"articles/{ARTICLE}": payload}), f"figshare:{ARTICLE}")
-
-
-def test_figshare_resolve_maps_the_payload():
-    record = figshare_record()
-    assert [f.name for f in record.files] == [NAME]
-    assert record.source == "figshare"
-    assert record.title.startswith("3_Summary of Main Findings")
-    assert record.doi == "10.6084/m9.figshare.32519553.v10"
-    assert record.license == "CC BY 4.0"
-    assert record.publisher == "Figshare"
-    assert record.landing.endswith("/32519553")
-    assert record.total_bytes == SIZE
-    assert record.files[0].size == SIZE
-
-
-def test_figshare_prefers_the_download_url_and_keeps_the_legacy_one():
-    (only,) = figshare_record().files
-    assert only.url == "https://ndownloader.figshare.com/files/70600233"
-    assert only.fallbacks == [
-        "https://api.figshare.com/v2/articles/32519553/files/70600233/download"
-    ]
-
-
-def test_figshare_without_a_download_url_uses_the_legacy_endpoint():
-    """The payload field is optional, so the fallback path is exercised separately."""
-    payload = fixture("figshare_article.json")
-    payload["files"].append({"id": 70600234, "name": "notes.txt", "size": 12})
-    record = figshare.resolve(FakeClient({f"articles/{ARTICLE}": payload}), f"figshare:{ARTICLE}")
-    notes = record.files[1]
-    assert notes.url == "https://api.figshare.com/v2/articles/32519553/files/70600234/download"
-    assert notes.fallbacks == []
-    assert notes.checksum is None
-
-
-def test_figshare_uses_computed_md5_not_the_supplied_one():
-    payload = fixture("figshare_article.json")
-    payload["files"][0]["supplied_md5"] = "0" * 32  # what the uploader claimed
-    algo, expected = verify.parse(figshare_record(payload).files[0].checksum)
-    assert algo == "md5"
-    assert expected == MD5
-
-
-def test_figshare_payload_matches_the_stored_bytes():
-    """Guards the fixture itself: if one side is swapped, this fails."""
-    (only,) = figshare_record().files
-    _, expected = verify.parse(only.checksum)
-    assert hashlib.md5(PDF).hexdigest() == expected
-    assert only.size == len(PDF) == SIZE
-
-
-def test_figshare_files_without_url_or_id_are_skipped():
-    payload = fixture("figshare_article.json")
-    payload["files"].append({"name": "ghost.txt"})
-    assert [f.name for f in figshare_record(payload).files] == [NAME]
-
-
-def test_figshare_without_files_raises():
-    payload = fixture("figshare_article.json")
-    payload["files"] = []
-    with pytest.raises(SourceError, match="no downloadable files"):
-        figshare_record(payload)
-
-
 # -- arXiv resolve (no fixture covered it before) -------------------------
 
 ATOM = b"""<?xml version="1.0" encoding="UTF-8"?>
@@ -305,3 +223,22 @@ def test_arxiv_asks_over_https():
     client = OpenClient(ATOM)
     arxiv.resolve(client, "arxiv:2401.12345")
     assert client.url.startswith("https://export.arxiv.org/api/query")
+
+
+# -- the recorded figshare fixture, kept as a real-bytes guard ------------
+
+ARTICLE = "32519553"
+MD5 = "bbde85208529e663141a0e8cb6fa9c4a"
+
+
+def test_the_recorded_payload_matches_the_stored_bytes():
+    """If either side of the fixture is swapped, this fails.
+
+    The adapter is gone; the pair still proves the verify path against a
+    published checksum instead of a synthetic string.
+    """
+    payload = fixture("figshare_article.json")
+    stored = (FIXTURES / "figshare_file.pdf").read_bytes()
+    assert hashlib.md5(stored).hexdigest() == MD5
+    assert payload["files"][0]["computed_md5"] == MD5
+    assert payload["files"][0]["size"] == len(stored)

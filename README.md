@@ -73,14 +73,17 @@ python -m pip install -e . && python -m pytest -q
 
 ## Usage
 
-These four work as typed -- they are real records, not placeholders:
+These work as typed:
 
 ```bash
 acadfetch fetch 10.5281/zenodo.23612969        # a DOI
 acadfetch fetch arxiv:1706.03762               # an arXiv id
-acadfetch fetch figshare:32519553              # an article id
 acadfetch fetch https://example.org/dataset.tar.gz   # any URL
 ```
+
+figshare was removed in 0.2.0: pass the article's download URL instead, and
+[`--checksum`](docs/migration-0.2.md) keeps the verification the API used to
+give you.
 
 The rest of the surface:
 
@@ -96,8 +99,8 @@ acadfetch verify ./data/manifest.json          # re-hash what you downloaded
 acadfetch sources                              # adapters, with an example each
 ```
 
-`10.5281/zenodo.123456`, `zenodo:123456`, `figshare:987654` and `arxiv:2401.12345`
-are placeholders; use any real id.
+`10.5281/zenodo.123456`, `zenodo:123456` and `arxiv:2401.12345` are placeholders;
+use any real id.
 
 ### In a pipeline
 
@@ -114,9 +117,8 @@ fields are added, never removed or given a new meaning, and `state` may gain
 values — treat an unknown one as non-terminal. `verify --json` reports per-file
 `MISMATCH` rows the same way, and its `summary` counts `skipped` rows
 separately. At the end of a failed transfer, `part` names the `.part` file that
-was kept, so a retry can resume instead of starting over. `figshare` needs a
-network its WAF likes -- see [docs/troubleshooting.md](docs/troubleshooting.md)
-if it answers 403.
+was kept, so a retry can resume instead of starting over. A 403 that carries a
+block page is retried; see [docs/troubleshooting.md](docs/troubleshooting.md).
 
 Progress is one aggregate line for the whole run
 (`3 file(s)  12.4/44.1 MiB  1.8 MiB/s  ETA 0:17`), redrawn in place on a TTY.
@@ -139,12 +141,13 @@ Exit codes: `0` success, `1` failure, `2` partial, `130` interrupted (rerun to r
 
 ## Tokens
 
-`ZENODO_TOKEN` and `FIGSHARE_TOKEN` are read from the environment and sent only
-to that repository, so a token never travels to a host that has no business
-seeing it -- including across a redirect: a hop to another host (a storage CDN, a
-download mirror) goes out without it, and a presigned URL gets no
-`Authorization` at all, because S3 rejects a request that carries both. `--header` still overrides, `--no-token` ignores the environment, and
-the manifest records the variable name plus the last four characters only:
+`ZENODO_TOKEN` is read from the environment and sent only to Zenodo, so a token
+never travels to a host that has no business seeing it -- including across a
+redirect: a hop to another host (a storage CDN, a download mirror) goes out
+without it, and a presigned URL gets no `Authorization` at all, because S3
+rejects a request that carries both. `--header` still overrides, `--no-token`
+ignores the environment, and the manifest records the variable name plus the
+last four characters only:
 
 ```bash
 export ZENODO_TOKEN=...            # restricted records, higher rate limits
@@ -204,28 +207,23 @@ count and `verified` is `null` rather than a false sense of safety.
 | Source | Target forms | Checksums |
 | --- | --- | --- |
 | Zenodo | DOI `10.5281/zenodo.N`, `zenodo:N`, record URL | md5 |
-| Figshare | DOI `10.6084/m9.figshare.N`, `figshare:N`, article URL | md5 |
 | arXiv | `arxiv:ID`, bare ID, abs/pdf URL | none (size only) |
 | doi.org | any DOI, resolved then dispatched | depends |
 | direct | any `http(s)` URL | headers, if present |
 
-Figshare's API sits behind a WAF that intermittently answers 403 to non-browser
-clients (an AWS ELB block page, some networks always, some never). Those 403s
-are retried twice with backoff, then the legacy per-file endpoint is tried;
-a 403 that is the API's own permission error is still terminal. Downloads
-themselves go to `ndownloader`, which the WAF leaves alone. The Figshare payload
-shape and block page are pinned in `tests/fixtures/` (the other adapters rely on
-their tests instead). Treat figshare as experimental: on a network it dislikes,
-no retry helps.
+figshare (`figshare:N`, `10.6084/…`, article URLs) was removed in 0.2.0; it
+answers with the conversion instead of a generic "cannot tell what this is".
+See [docs/migration-0.2.md](docs/migration-0.2.md).
 
-If you know your network gets through, `--retry-403 0` skips the retries
-entirely and makes every 403 final on the first answer.
+A CDN in front of a direct URL can answer 403 with a block page. Those are
+retried twice with backoff, while a 403 carrying the application's own JSON is
+terminal on the first answer; `--retry-403 N` changes the count.
 
 ## Politeness
 
 Defaults: 3 parallel transfers, 2 requests/second, 4 retries with jittered
-exponential backoff, `Retry-After` honoured up to 120 s. A WAF block page is
-retried twice (`--retry-403 N`); Zenodo and arXiv are donation-funded —
+exponential backoff, `Retry-After` honoured up to 120 s. A block page is retried twice
+(`--retry-403 N`); Zenodo and arXiv are donation-funded —
 `--rate 1 -j 1` costs you minutes and costs them less.
 
 Respect the license in the manifest. `--dry-run` prints it before you spend
@@ -252,8 +250,8 @@ honest way to test this code path.
 
 ## Known limits
 
-- Figshare is experimental: its API answers 403 from networks its WAF dislikes,
-  and no retry fixes that. Zenodo, arXiv and direct URLs are the supported paths.
+- figshare was removed in 0.2.0; existing figshare manifests still verify, and
+  new targets convert with one `--checksum` command ([docs/migration-0.2.md](docs/migration-0.2.md)).
 - Tokens come from the environment only; no interactive `login` flow and no
   per-file token refresh.
 - No search/pagination; you bring the target.

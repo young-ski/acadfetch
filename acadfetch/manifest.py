@@ -108,6 +108,7 @@ def _entry(  # noqa: ANN001
         "url": hide(f.url),
         "size": f.size,
         "checksum": f.checksum,
+        "checksum_source": f.checksum_source,
         "sha256": _sha256(result),
         "bytes": result.bytes if result else 0,
         "state": state,
