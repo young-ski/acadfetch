@@ -37,6 +37,12 @@ pre-1.0: a minor bump may break a flag.
 
 ### Fixed
 
+- A repository file called `manifest.json` was overwritten by our manifest, and
+  one called `x.part` was swallowed by `x`'s sidecar (`x` ended up with mixed
+  bytes and `x.part` disappeared). The names the tool itself writes are reserved
+  before allocation, so the repository's file is kept as `manifest (2).json` /
+  `x (2).part` instead.
+
 - A DOI that resolved to a web page (Mendeley, Dryad, an institutional
   repository's front door) was handed to the direct adapter, and the HTML was
   written out as the dataset — `state: "downloaded"`, a SHA-256 over the markup,
