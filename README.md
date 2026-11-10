@@ -58,7 +58,7 @@ From a checkout, for development:
 
 ```bash
 git clone https://github.com/young-ski/acadfetch && cd acadfetch
-python -m pip install -e . && python -m pytest -q
+python -m pip install -e . pytest && python -m pytest -q
 ```
 
 ## Supported platforms
@@ -66,8 +66,8 @@ python -m pip install -e . && python -m pytest -q
 | Platform | Status |
 | --- | --- |
 | Linux | tested — CI, every supported Python |
-| Windows | tested — CI, every supported Python |
-| macOS | best effort — CI runs it on 3.12 and 3.14, a failure is a bug to fix but does not hold a release |
+| Windows | tested — CI on 3.10, 3.13 and 3.15 |
+| macOS | best effort — CI runs it on 3.12 and 3.15, a failure is a bug to fix but does not hold a release |
 | Windows ARM | untested |
 | Python 3.15 | tested — CI, on Linux and Windows |
 
@@ -78,7 +78,7 @@ These work as typed:
 ```bash
 acadfetch fetch 10.5281/zenodo.23612969        # a DOI
 acadfetch fetch arxiv:1706.03762               # an arXiv id
-acadfetch fetch https://example.org/dataset.tar.gz   # any URL
+acadfetch fetch https://ndownloader.figshare.com/files/70600233/report.pdf  # any URL
 ```
 
 figshare was removed in 0.2.0: pass the article's download URL instead, and
@@ -122,8 +122,9 @@ block page is retried; see [docs/troubleshooting.md](docs/troubleshooting.md).
 
 Progress is one aggregate line for the whole run
 (`3 file(s)  12.4/44.1 MiB  1.8 MiB/s  ETA 0:17`), redrawn in place on a TTY.
-When stdout is a pipe it is rewritten as a fresh whole line at most every 5 s, so
-a CI log stays greppable without becoming a wall. `-q` turns it off.
+When stdout is a pipe it becomes a new line at most every 5 s (one extra when a
+file starts or stops), so a CI log stays greppable without becoming a wall. `-q`
+turns it off.
 
 Output defaults to `acadfetch-out/<source>-<id>` (a URL adds its host and a short
 hash), and `-n` prints it before
@@ -143,7 +144,7 @@ A DOI that resolves to a web page instead of a file is refused, naming the
 page: fetching the landing page as if it were the dataset is how a repository's
 front door ends up being cited as a data file.
 
-A run that cannot fit is refused before the first request, naming the shortfall:
+A run that cannot fit is refused before the first byte is transferred, naming the shortfall:
 `needs 41.2 GiB but 12.0 GiB is free`. What is already on disk is subtracted, so
 a resume is judged on the remainder. Each finished file is flushed before its
 rename (`--no-fsync` skips that; it is faster and weaker against a power cut).

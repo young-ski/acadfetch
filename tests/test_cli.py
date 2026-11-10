@@ -405,3 +405,24 @@ def test_max_size_is_refused_before_any_bytes(monkeypatch, capsys):
 def test_sources_shows_a_usable_example(capsys):
     assert cli.main(["sources"]) == 0
     assert "zenodo:123456" in capsys.readouterr().out
+
+
+def test_fetch_without_a_target_names_three_commands(capsys):
+    assert cli.main(["fetch"]) == 1
+    err = capsys.readouterr().err
+    assert err.count("acadfetch fetch ") == 3
+    for gap in ("zenodo", "arxiv", "ndownloader"):
+        assert gap in err
+
+
+def test_fetch_help_carries_the_target_forms_and_codes(capsys):
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["fetch", "--help"])
+    out = capsys.readouterr().out
+    assert "target forms:" in out and "exit codes:" in out
+    assert "64 bad usage" in out
+
+
+def test_the_direct_example_is_a_real_url(capsys):
+    cli.main(["sources"])
+    assert "ndownloader.figshare.com" in capsys.readouterr().out

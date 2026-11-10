@@ -184,6 +184,19 @@ pre-1.0: a minor bump may break a flag.
 
 ### Documentation
 
+- The fourth "works as typed" command was `https://example.org/dataset.tar.gz`,
+  a reserved domain that answers 404; so was the direct example in `sources`.
+  Both are now a real ndownloader URL, which doubles as the figshare recipe.
+  `fetch` with no target prints the three commands instead of talking about
+  `--only`, and `fetch --help` carries the target forms and the exit codes.
+- The platform table claimed Windows was tested on every supported Python (it is
+  tested on 3.10, 3.13, 3.15) and that macOS ran 3.12 and 3.14 (it is 3.12 and
+  3.15). The development install dropped `pytest` from a command that then ran
+  `pytest`.
+- "Refused before the first request" meant before the first *byte*: the record
+  is resolved first. The progress line's pipe behaviour is described with the
+  extra frame it actually emits per file.
+
 - The usage block was four placeholders deep: two of the first three ids did not
   resolve. It now leads with four real records, says which ones are placeholders,
   and offers `uvx` so a first run needs no install at all.
