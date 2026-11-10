@@ -33,7 +33,7 @@ EXAMPLES = {
     "zenodo": "zenodo:123456",
     "arxiv": "arxiv:2401.12345",
     "doi": "10.5281/zenodo.123456",
-    "direct": "https://example.org/data.tar.gz",
+    "direct": "https://ndownloader.figshare.com/files/70600233/report.pdf",
 }
 EPILOG = """target forms:
   10.5281/zenodo.123456        a DOI
@@ -557,7 +557,12 @@ def build_parser() -> argparse.ArgumentParser:
             help="ignore $ZENODO_TOKEN",
         )
 
-    fetch = sub.add_parser("fetch", help="download every file of a record")
+    fetch = sub.add_parser(
+        "fetch",
+        help="download every file of a record",
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     fetch.add_argument(
         "target",
         nargs="?",
@@ -664,8 +669,10 @@ def main(argv: list[str] | None = None) -> int:
     _recover_target(args)
     if getattr(args, "command", "") == "fetch" and getattr(args, "target", None) is None:
         message = (
-            "which record? put a target after --only, e.g. "
-            "acadfetch fetch zenodo:123456 --only raw.tar.gz"
+            "which record? try one of:\n"
+            "  acadfetch fetch 10.5281/zenodo.23612969\n"
+            "  acadfetch fetch arxiv:1706.03762\n"
+            "  acadfetch fetch https://ndownloader.figshare.com/files/70600233/report.pdf"
         )
         print(f"acadfetch: {message}", file=sys.stderr)
         _emit_error(args, message)
