@@ -278,3 +278,40 @@ def test_direct_without_headers_has_no_size_or_source():
     rec = direct.resolve(HeadClient({}), "https://h/a.csv")
     (only,) = rec.files
     assert only.size is None and only.checksum is None and only.checksum_source is None
+
+
+def test_a_missing_licence_is_unknown_not_a_guess():
+    record = arxiv.resolve(OpenClient(ATOM), "arxiv:2401.12345v2")
+    assert record.license == "unknown"
+
+
+def test_the_licence_arxiv_reports_is_used():
+    body = ATOM.replace(
+        b"<title>Distributionally",
+        b'<arxiv:license href="http://arxiv.org/licenses/cc_by/4.0/"/><title>Distributionally',
+    ).replace(
+        b'xmlns="http://www.w3.org/2005/Atom"',
+        b'xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom"',
+    )
+    record = arxiv.resolve(OpenClient(body), "arxiv:2401.12345v2")
+    assert record.license == "cc_by"
+
+
+LEGACY = ATOM.replace(b"2401.12345v2", b"solv-int/9701001v2")
+
+
+def test_a_legacy_id_keeps_its_archive_and_version():
+    """``solv-int/9701001v2`` used to become ``sol`` and lose the paper."""
+    record = arxiv.resolve(OpenClient(LEGACY), "arxiv:solv-int/9701001v2")
+    assert record.files[0].name == "solv-int_9701001.pdf"
+    assert record.doi == "10.48550/arXiv.solv-int/9701001"
+    assert record.version == "2"
+
+
+def test_two_legacy_papers_no_longer_share_a_name():
+    first = arxiv.resolve(OpenClient(LEGACY), "arxiv:solv-int/9701001v2")
+    second = arxiv.resolve(
+        OpenClient(ATOM.replace(b"2401.12345v2", b"solv-int/9701002v1")),
+        "arxiv:solv-int/9701002v1",
+    )
+    assert first.files[0].name != second.files[0].name
