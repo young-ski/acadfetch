@@ -28,7 +28,7 @@ from pathlib import Path
 from . import atomic, naming, verify
 from .client import Client
 from .consts import CHUNK
-from .errors import HttpError, PartialError
+from .errors import HttpError, LocalError, PartialError, TargetError
 from .progress import Progress
 from .sources.base import File, Record, Result
 from .units import human
@@ -377,7 +377,9 @@ def _trusted_urls(manifest_path: Path) -> dict[str, str]:
     }
 
 
-def check_disk(files, out: Path, *, margin: int = DISK_MARGIN) -> tuple[int, int]:  # noqa: ANN001
+def check_disk(
+    files, out: Path, *, margin: int = DISK_MARGIN, strict: bool = True
+) -> tuple[int, int]:  # noqa: ANN001
     """Refuse a run that cannot fit, before it spends a night on 97% of it.
 
     Returns ``(free, needed)``. Only files with a published size can be counted;
@@ -398,13 +400,10 @@ def check_disk(files, out: Path, *, margin: int = DISK_MARGIN) -> tuple[int, int
     if needed <= 0:
         return (0, 0)
     free = shutil.disk_usage(_existing(out)).free
-    if free < needed + margin:
-        raise HttpError(
-            0,
-            str(out),
+    if strict and free < needed + margin:
+        raise LocalError(
             f"needs {human(needed)} but {human(free)} is free in {out} "
-            f"(keeps {human(margin)} spare; free space or choose -o)",
-            reason="disk",
+            f"(keeps {human(margin)} spare; free space or choose -o)"
         )
     return (free, needed)
 
@@ -625,6 +624,8 @@ def fetch_record(
 def _fetch_record(
     record: Record, opts: Options, client: Client, only: list[str] | None = None
 ) -> list[Result]:
+    if opts.out.exists() and not opts.out.is_dir():
+        raise TargetError(f"-o must be a directory, and {opts.out} is a file")
     opts.out.mkdir(parents=True, exist_ok=True)
     files = record.files
     if only:
@@ -658,6 +659,8 @@ def _fetch_record(
                 _STOP.set()
                 results.append(Result(file=file, state="failed", error="interrupted"))
                 break
+            except Exception as exc:  # noqa: BLE001 - one file must not end the batch
+                results.append(_crashed(file, exc))
             if opts.interrupted:
                 break
         return _in_record_order(results, record)
@@ -669,7 +672,11 @@ def _fetch_record(
             with lock:
                 futures[pool.submit(fetch_file, client, file, opts, taken)] = file
         for future in as_completed(futures):
-            results.append(future.result())
+            file = futures[future]
+            try:
+                results.append(future.result())
+            except Exception as exc:  # noqa: BLE001 - one worker must not end the batch
+                results.append(_crashed(file, exc))
     except KeyboardInterrupt:
         # Abort the reads that are blocked, then let the workers unwind: they
         # see the stop flag and keep their .part instead of retrying.
@@ -689,6 +696,16 @@ def _fetch_record(
     else:
         pool.shutdown(wait=True)
     return _in_record_order(results, record)
+
+
+def _crashed(file: File, exc: Exception) -> Result:
+    """An unexpected worker exception, as one failed row instead of a traceback."""
+    return Result(
+        file=file,
+        state="failed",
+        error=f"{type(exc).__name__}: {exc}",
+        retrieved_at=_now(),
+    )
 
 
 def _in_record_order(results: list[Result], record: Record) -> list[Result]:

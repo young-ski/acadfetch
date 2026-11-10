@@ -19,6 +19,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from http.client import HTTPException
 
 from . import consts, verify
 from .errors import HttpError
@@ -201,12 +202,22 @@ class Client:
                     ) from exc
                 else:
                     waf += 1
+            except HttpError as exc:
+                # Raised by a caller-supplied fn, e.g. a body that stopped
+                # short. Only the transient ones are worth another request.
+                if not exc.transient:
+                    raise
+                last = exc
+                last_detail = str(exc)
+                last_blocked = False
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 last = exc
                 last_detail = str(exc)
                 last_blocked = False
             if attempt < budget - 1:
                 self._sleep(attempt, retry_after)
+        if isinstance(last, HttpError):
+            raise last
         if isinstance(last, urllib.error.HTTPError):
             detail = (
                 _blocked_detail(last_detail, waf if budget > 1 else None)
@@ -226,8 +237,18 @@ class Client:
         return self._with_retries(url, self._open, headers, attempts=attempts)
 
     def get_json(self, url: str, headers: Mapping[str, str] | None = None) -> dict:
-        with self.open(url, headers) as resp:
-            raw = resp.read(MAX_JSON)
+        def _read(req):  # noqa: ANN001
+            with self._open(req) as resp:
+                try:
+                    return resp.read(MAX_JSON)
+                except (HTTPException, TimeoutError, OSError) as exc:
+                    # IncompleteRead is an HTTPException, not an OSError: left
+                    # alone it escaped the retry loop as a traceback.
+                    raise HttpError(
+                        0, url, f"could not read the response body: {exc}", transient=True
+                    ) from exc
+
+        raw = self._with_retries(url, _read, headers)
         try:
             return json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
