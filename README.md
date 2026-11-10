@@ -109,11 +109,14 @@ acadfetch fetch zenodo:123456 --json | jq -r '.files[] | select(.state=="failed"
 ```
 
 Exit codes are unchanged, and a failure before any transfer still produces a
-document with `error` set. `report` is the document's schema version: fields are
-added, never removed or given a new meaning. `verify --json` reports per-file
-`MISMATCH` rows the same way. At the end of a failed transfer, `part` names the
-`.part` file that was kept, so a retry can resume instead of starting over. `figshare` needs a network its WAF likes --
-see [docs/troubleshooting.md](docs/troubleshooting.md) if it answers 403.
+document with `error` set. `report` is the document's schema version (now `2`):
+fields are added, never removed or given a new meaning, and `state` may gain
+values — treat an unknown one as non-terminal. `verify --json` reports per-file
+`MISMATCH` rows the same way, and its `summary` counts `skipped` rows
+separately. At the end of a failed transfer, `part` names the `.part` file that
+was kept, so a retry can resume instead of starting over. `figshare` needs a
+network its WAF likes -- see [docs/troubleshooting.md](docs/troubleshooting.md)
+if it answers 403.
 
 Progress is one aggregate line for the whole run
 (`3 file(s)  12.4/44.1 MiB  1.8 MiB/s  ETA 0:17`), redrawn in place on a TTY.
@@ -154,27 +157,36 @@ Every completed run writes `manifest.json`:
 
 ```json
 {
-  "schema": 2,
+  "schema": 3,
   "doi": "10.5281/zenodo.123456",
   "license": "cc-by-4.0",
   "files": [
     { "name": "raw.tar.gz", "size": 8123, "checksum": "md5:9f2c…",
-      "sha256": "b41d…", "state": "downloaded",
-      "verified": true, "verified_reason": "matched-md5" }
+      "sha256": "b41d…", "state": "downloaded", "selected": true,
+      "verified": true, "verified_reason": "matched-md5" },
+    { "name": "notes.txt", "size": 12, "state": "not-selected", "selected": false,
+      "sha256": null, "verified": null, "verified_reason": "not-selected" }
   ]
 }
 ```
 
+The manifest describes **the record**, not the run: `--only` still writes a row
+for every file, so `verify` can tell "not fetched" from "fetched and then lost",
+and a successful `--only` run verifies green. Add `--require-all` when you want
+the whole record accounted for. Full field and state reference:
+[docs/manifest.md](docs/manifest.md).
+
 `name` is the file *on disk*, which can differ from the repository's name when two
 files collide. `verified_reason` separates the two kinds of `verified: null`:
 `no-checksum-published` (arXiv) from `unparseable-checksum` (a repository that
-published something we cannot name an algorithm for). Schema 1 manifests still
-read, and `verify` says so, because their names were recorded before duplicates
-were resolved.
+published something we cannot name an algorithm for). Schema 1 and 2 manifests
+still read, and `verify` says so for schema 1, because their names were recorded
+before duplicates were resolved.
 
 `acadfetch verify` recomputes SHA-256 for each entry and exits non-zero on any
-mismatch or missing file. Commit the manifest next to your analysis; it is what
-makes the download reproducible a year later.
+mismatch or missing file; rows the run never selected are reported `skipped`.
+Commit the manifest next to your analysis; it is what makes the download
+reproducible a year later.
 
 Names are resolved against the manifest's own directory, and a name that points
 outside it — `../sibling/file`, an absolute path, a symlink leading out — is

@@ -25,7 +25,8 @@ from .verify import reason as verify_reason
 
 EXIT_OK, EXIT_FAIL, EXIT_PARTIAL, EXIT_INTERRUPT = 0, 1, 2, 130
 #: Bumped only when a field changes meaning or disappears. New fields do not.
-REPORT_SCHEMA = 1
+#: 2: file rows carry ``selected``; ``state`` may be ``not-selected``/``planned``.
+REPORT_SCHEMA = 2
 EXAMPLES = {
     "zenodo": "zenodo:123456",
     "figshare": "figshare:987654",
@@ -156,7 +157,7 @@ def _token_for(args: argparse.Namespace, record):  # noqa: ANN001, ANN202
 def cmd_manifest(args: argparse.Namespace) -> int:
     client = _client(args)
     record = _resolve(args, client)
-    data = manifest.build(record, [], _token_for(args, record))
+    data = manifest.build(record, [], _token_for(args, record), planned=True)
     out = Path(args.out or "manifest.json")
     manifest.write(out, data)
     print(f"{len(record.files)} file(s) -> {out}")
@@ -183,6 +184,7 @@ def _file_row(row) -> dict:  # noqa: ANN001
         "size": row.file.size,
         "bytes": row.bytes,
         "state": row.state,
+        "selected": True,
         "verified": row.verified,
         "verified_reason": verify_reason(row.file.checksum, row.verified),
         "resumed_from": row.resumed_from,
@@ -279,6 +281,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
                     "size": f.size,
                     "bytes": 0,
                     "state": "planned",
+                    "selected": True,
                     "verified": None,
                     "verified_reason": verify_reason(f.checksum, None),
                     "resumed_from": 0,
@@ -334,7 +337,14 @@ def cmd_fetch(args: argparse.Namespace) -> int:
             # "nothing happened" and the rerun looks like it starts over.
             print(f"     kept {human(row.bytes)} in {Path(row.part).name} - rerun to resume")
 
-    data = manifest.build(record, results, token)
+    data = manifest.build(
+        record,
+        results,
+        token,
+        # Which files this run asked for: a --only run must not look like a
+        # run that fetched everything and then lost most of it.
+        selected_ids={id(f) for f in _selected(record, args.only)},
+    )
     code = EXIT_OK
     try:
         manifest.write(out_dir / "manifest.json", data)
@@ -381,21 +391,43 @@ def cmd_verify(args: argparse.Namespace) -> int:
         print(manifest.SCHEMA_1_NOTE, file=sys.stderr)
     doc["root"] = str(root)
     rows = manifest.verify_manifest(manifest_path, root, allow_escape=args.allow_escape)
-    bad = sum(1 for row in rows if row["status"] != "ok")
+    skipped = sum(1 for row in rows if row["status"] == "skipped")
+    hard = sum(1 for row in rows if row["status"] not in ("ok", "skipped"))
+    # --require-all turns "you never asked for it" into a failure; the plain
+    # default does not, because a --only manifest is a complete description of
+    # the files it did fetch.
+    bad = hard + (skipped if args.require_all else 0)
+    ok = len(rows) - hard - skipped
     if not args.json:
         for row in rows:
             print(f"{row['status']:>9} {row['name']}")
-        print()
-        print(f"{len(rows) - bad}/{len(rows)} ok")
+        if rows:
+            print()
+            tally = f"{ok}/{len(rows)} ok"
+            if skipped:
+                tally += f", {skipped} skipped"
+            print(tally)
     if not args.allow_escape and any(row["status"] == "escaped" for row in rows):
         print(f"some names leave {root} - --allow-escape follows them", file=sys.stderr)
     doc["rows"] = [
-        {k: row[k] for k in ("name", "status", "expected", "actual") if k in row} for row in rows
+        {k: row[k] for k in ("name", "status", "state", "sha256", "expected", "actual") if k in row}
+        for row in rows
     ]
-    doc["summary"] = {"total": len(rows), "ok": len(rows) - bad, "bad": bad, "ok_run": not bad}
+    doc["summary"] = {
+        "total": len(rows),
+        "ok": ok,
+        "bad": bad,
+        "skipped": skipped,
+        "ok_run": bool(rows) and not bad,
+    }
     if not rows:
         print("the manifest lists no files", file=sys.stderr)
         doc["error"] = "the manifest lists no files"
+    elif skipped and not args.require_all:
+        print(
+            f"{skipped} file(s) were not selected (-n/--only); --require-all counts them",
+            file=sys.stderr,
+        )
     if args.json:
         _emit(doc)
     if not rows:
@@ -507,6 +539,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-escape",
         action="store_true",
         help="follow names that leave --root (a manifest can point outside it)",
+    )
+    ver.add_argument(
+        "--require-all",
+        action="store_true",
+        help="count a file that was never selected (--only, or a manifest-only "
+        "run) as a failure instead of skipping it",
     )
     ver.add_argument(
         "--json",
