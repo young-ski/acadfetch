@@ -384,7 +384,9 @@ def test_dry_run_prints_the_destination(monkeypatch, capsys):
 def test_dry_run_applies_only(monkeypatch, capsys):
     _stub_resolve(monkeypatch)
     assert cli.main(["fetch", "zenodo:1", "-n", "--only", "nope"]) == 1
-    assert "no file matched" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "no file matched" in err
+    assert "available:" in err, "say which names exist, not only that one did not"
 
 
 def test_max_size_is_refused_before_any_bytes(monkeypatch, capsys):

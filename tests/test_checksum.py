@@ -76,7 +76,7 @@ def test_a_bad_format_is_refused_before_the_request(bad, monkeypatch, capsys):
     monkeypatch.setattr(cli.registry, "resolve", boom)
     with pytest.raises(SystemExit) as caught:
         cli.main(["fetch", "x", "--checksum", bad])
-    assert caught.value.code == 2
+    assert caught.value.code == cli.EXIT_USAGE
 
 
 def test_the_supplied_checksum_reaches_a_plan(served, capsys, tmp_path):
