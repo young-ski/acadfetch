@@ -173,8 +173,10 @@ Every completed run writes `manifest.json`:
 The manifest describes **the record**, not the run: `--only` still writes a row
 for every file, so `verify` can tell "not fetched" from "fetched and then lost",
 and a successful `--only` run verifies green. Add `--require-all` when you want
-the whole record accounted for. Full field and state reference:
-[docs/manifest.md](docs/manifest.md).
+the whole record accounted for. Each fetched row also records `final_url`,
+`etag`, `http_status` and `retrieved_at`, and credential query parameters are
+stripped from every URL (`--record-full-url` keeps them). Full field and state
+reference: [docs/manifest.md](docs/manifest.md).
 
 `name` is the file *on disk*, which can differ from the repository's name when two
 files collide. `verified_reason` separates the two kinds of `verified: null`:

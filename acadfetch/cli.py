@@ -14,8 +14,9 @@ import time
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from . import auth, consts, manifest, naming
+from . import auth, consts, manifest, naming, urls
 from .client import Client
 from .downloader import Options, check_disk, check_total, fetch_record, human
 from .errors import AcFError, PartialError, TargetError
@@ -157,11 +158,13 @@ def _token_for(args: argparse.Namespace, record):  # noqa: ANN001, ANN202
 def cmd_manifest(args: argparse.Namespace) -> int:
     client = _client(args)
     record = _resolve(args, client)
-    data = manifest.build(record, [], _token_for(args, record), planned=True)
+    data = manifest.build(
+        record, [], _token_for(args, record), planned=True, redact=not args.record_full_url
+    )
     out = Path(args.out or "manifest.json")
     manifest.write(out, data)
     print(f"{len(record.files)} file(s) -> {out}")
-    _print_header(record)
+    _print_header(record, lambda value: _hide(value, args))
     if token := _token_for(args, record):
         print(f"auth    : token from {token}")
     return EXIT_OK
@@ -178,13 +181,26 @@ def _report(args: argparse.Namespace) -> dict:
     }
 
 
-def _file_row(row) -> dict:  # noqa: ANN001
+def _hide(text: str, args: argparse.Namespace) -> str:
+    """Redact credential query parameters unless --record-full-url asked for
+    the original string."""
+    return text if getattr(args, "record_full_url", False) else urls.redact(text)
+
+
+def _hide_text(text: str, args: argparse.Namespace) -> str:
+    return text if getattr(args, "record_full_url", False) else urls.redact_text(text)
+
+
+def _file_row(row, redact: bool = True) -> dict:  # noqa: ANN001
+    hide = urls.redact if redact else (lambda value: value)
     return {
         "name": naming.sanitize(row.name or row.file.name),
         "size": row.file.size,
         "bytes": row.bytes,
         "state": row.state,
         "selected": True,
+        "http_status": row.http_status,
+        "final_url": hide(row.final_url) if row.final_url else None,
         "verified": row.verified,
         "verified_reason": verify_reason(row.file.checksum, row.verified),
         "resumed_from": row.resumed_from,
@@ -207,7 +223,7 @@ def _emit(doc: dict) -> None:
     print(json.dumps(doc, ensure_ascii=False))
 
 
-def _print_header(record) -> None:  # noqa: ANN001
+def _print_header(record, hide=urls.redact) -> None:  # noqa: ANN001
     print(f"title   : {record.title or '(untitled)'}")
     if record.doi:
         print(f"doi     : {record.doi}")
@@ -215,7 +231,7 @@ def _print_header(record) -> None:  # noqa: ANN001
     total = record.total_bytes
     print(f"files   : {len(record.files)}" + (f", {human(total)}" if total is not None else ""))
     if record.landing:
-        print(f"landing : {record.landing}")
+        print(f"landing : {hide(record.landing)}")
 
 
 def _selected(record, only: list[str] | None):  # noqa: ANN001, ANN202
@@ -235,14 +251,14 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     record = _resolve(args, client)
     doc = _report(args)
     doc.update(
-        target=record.target,
+        target=_hide(record.target, args),
         source=record.source,
         doi=record.doi,
         license=record.license,
-        landing=record.landing,
+        landing=_hide(record.landing, args),
     )
     if not args.json:
-        _print_header(record)
+        _print_header(record, lambda value: _hide(value, args))
     token = _token_for(args, record)
     if token and not args.json:
         print(f"auth    : token from {token}")
@@ -250,6 +266,11 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     out_dir = Path(args.out or f"acadfetch-out/{record.source}-{_slug(record)}")
     doc["out"] = str(out_dir)
     doc["dry_run"] = bool(args.dry_run)
+    # Say whether a credential was stripped, so a script can tell the manifest
+    # is not replayable as-is.
+    doc["url_redacted"] = record.target != _hide(record.target, args) or record.landing != _hide(
+        record.landing, args
+    )
     # Progress shares stdout with the report, so it moves to stderr under --json.
     progress = Progress(stream=sys.stderr if args.json else None, enabled=not args.quiet)
     opts = Options(
@@ -314,7 +335,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         progress.finish()
 
     failures = [r for r in results if not r.ok]
-    doc["files"] = [_file_row(r) for r in results]
+    doc["files"] = [_file_row(r, redact=not args.record_full_url) for r in results]
     doc["summary"] = {
         "total": len(results),
         "downloaded": sum(1 for r in results if r.state == "downloaded"),
@@ -344,6 +365,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         # Which files this run asked for: a --only run must not look like a
         # run that fetched everything and then lost most of it.
         selected_ids={id(f) for f in _selected(record, args.only)},
+        redact=not args.record_full_url,
     )
     code = EXIT_OK
     try:
@@ -438,7 +460,10 @@ def cmd_verify(args: argparse.Namespace) -> int:
 def _slug(record) -> str:  # noqa: ANN001
     if record.doi:
         return naming.sanitize(record.doi.replace("/", "_"))
-    return naming.sanitize(record.target.rsplit("/", 1)[-1] or "record")
+    # The path only: a presigned query is long and belongs in the manifest,
+    # not in a directory name.
+    path = urlsplit(record.target).path or record.target
+    return naming.sanitize(path.rsplit("/", 1)[-1] or "record")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -520,12 +545,23 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print one JSON report to stdout, progress to stderr",
     )
+    fetch.add_argument(
+        "--record-full-url",
+        action="store_true",
+        help="keep credential query parameters (X-Amz-Signature, token, …) in "
+        "the manifest and on stdout instead of stripping them",
+    )
     network_flags(fetch)
     fetch.set_defaults(func=cmd_fetch)
 
     man = sub.add_parser("manifest", help="write a manifest without downloading")
     man.add_argument("target")
     man.add_argument("-o", "--out")
+    man.add_argument(
+        "--record-full-url",
+        action="store_true",
+        help="keep credential query parameters in the manifest",
+    )
     network_flags(man)
     man.set_defaults(func=cmd_manifest)
 
@@ -577,8 +613,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.func(args)
     except AcFError as exc:  # TargetError is one
-        print(f"acadfetch: {exc}", file=sys.stderr)
-        _emit_error(args, str(exc))
+        # An error sentence carries the URL, and that URL may carry a signature.
+        message = _hide_text(str(exc), args)
+        print(f"acadfetch: {message}", file=sys.stderr)
+        _emit_error(args, message)
         return EXIT_FAIL
     except KeyboardInterrupt:
         print("\ninterrupted - partial files kept, rerun to resume", file=sys.stderr)

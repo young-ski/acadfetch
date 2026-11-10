@@ -266,3 +266,71 @@ def test_schema_2_is_still_readable(tmp_path):
     )
     assert manifest.load(path)["schema"] == 2
     assert manifest.verify_manifest(path, tmp_path)[0]["status"] == "ok"
+
+
+# -- schema 3: provenance, and credentials out of the URL -----------------
+
+SIGNED = "https://bucket.example/a.csv?X-Amz-Signature=SECRET&X-Amz-Credential=AKIA"
+
+
+def signed_record():
+    return Record(
+        source="direct",
+        target=SIGNED,
+        landing=SIGNED,
+        files=[File(SIGNED, "a.csv", 1)],
+    )
+
+
+def test_provenance_fields_are_recorded(tmp_path):
+    (tmp_path / "a.csv").write_bytes(b"a")
+    rec = signed_record()
+    result = Result(
+        rec.files[0],
+        "downloaded",
+        path=str(tmp_path / "a.csv"),
+        bytes=1,
+        name="a.csv",
+        final_url=SIGNED,
+        etag='"v1"',
+        http_status=200,
+        retrieved_at="2026-11-10T00:00:00+00:00",
+    )
+
+    row = manifest.build(rec, [result])["files"][0]
+
+    assert row["http_status"] == 200
+    assert row["etag"] == '"v1"'
+    assert row["retrieved_at"] == "2026-11-10T00:00:00+00:00"
+    assert "SECRET" not in row["final_url"]
+
+
+def test_a_planned_row_has_no_provenance():
+    row = manifest.build(signed_record(), [], planned=True)["files"][0]
+    assert (row["final_url"], row["etag"], row["http_status"], row["retrieved_at"]) == (
+        None,
+        None,
+        None,
+        None,
+    )
+
+
+def test_credentials_are_stripped_and_flagged():
+    data = manifest.build(signed_record(), [])
+    assert "SECRET" not in data["target"]
+    assert "SECRET" not in data["landing"]
+    assert "SECRET" not in data["files"][0]["url"]
+    assert data["url_redacted"] is True
+
+
+def test_record_full_url_keeps_the_query():
+    data = manifest.build(signed_record(), [], redact=False)
+    assert "SECRET" in data["target"]
+    assert data["url_redacted"] is False
+
+
+def test_a_plain_url_is_not_flagged_as_redacted():
+    rec = Record(
+        source="direct", target="https://x/a.csv", files=[File("https://x/a.csv", "a.csv")]
+    )
+    assert manifest.build(rec, [], planned=True)["url_redacted"] is False

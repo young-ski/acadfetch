@@ -18,6 +18,7 @@ lists gets a row, whether or not this run asked for it.
 | `target` | string | Exactly what the user typed. |
 | `doi`, `title`, `license`, `publisher`, `version`, `landing` | string | Repository metadata, `""` when absent. |
 | `selected_only` | bool | `true` when a run deliberately left part of the record alone (`--only`). |
+| `url_redacted` | bool | `true` when a credential query parameter was stripped from a URL below. |
 | `remote_checked_at` | RFC 3339 \| null | When a remote re-check happened; `null` until `verify --against-remote` is run. |
 | `auth` | object \| null | `{"env": "ZENODO_TOKEN", "hint": "…9f2c"}` — never the secret. |
 | `files` | array | One row per file of the record. |
@@ -27,7 +28,11 @@ lists gets a row, whether or not this run asked for it.
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `name` | string | The name **on disk**, after sanitising and duplicate resolution. |
-| `url` | string | The URL the record published. |
+| `url` | string | The URL the record published, credentials stripped. |
+| `final_url` | string \| null | The URL the bytes actually came from, after redirects. |
+| `etag` | string \| null | Validator the server sent, useful for `If-Range`. |
+| `http_status` | int \| null | Final status of the transfer (`200`, `206`, or the failure). |
+| `retrieved_at` | RFC 3339 \| null | When the last byte (or the failure) arrived. |
 | `size` | int \| null | Published size, when there is one. |
 | `checksum` | string \| null | `algo:hex`, as published. |
 | `sha256` | string \| null | Hash of the bytes on disk, computed after the transfer. |
@@ -55,6 +60,18 @@ future state does not quietly turn `verify` green.
 
 `matched-<algo>` · `mismatch` · `no-checksum-published` · `unparseable-checksum`
 · `unchecked` · `transfer-failed` · `not-selected` · `planned`.
+
+## Credentials in URLs
+
+A presigned URL is a bearer credential in query form. The manifest is meant to be
+committed, so `X-Amz-Signature`, `X-Amz-Credential`, `X-Amz-Security-Token`,
+`signature`, `sig`, `token` and `access_token` are stripped from `target`,
+`landing`, `url`, `final_url` and from what the CLI prints. `url_redacted` says
+whether it happened.
+
+Stripping is lossy: the recorded URL may no longer be replayable. Pass
+`--record-full-url` when you need the original string (and accept that the
+signature may have expired by the time anyone reads it).
 
 ## What `verify` guarantees
 
