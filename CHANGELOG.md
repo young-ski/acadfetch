@@ -37,6 +37,17 @@ pre-1.0: a minor bump may break a flag.
 
 ### Fixed
 
+- arXiv legacy ids were cut at the first `v`, so `solv-int/9701001v2` became
+  `sol` — a DOI that does not exist (`10.48550/arXiv.sol`), a file called
+  `sol.pdf`, a version of `-int/9701001v2`, and one directory shared by every
+  `solv-int` paper, where the second was skipped as already present. Only the
+  trailing `v<digits>` is stripped now, the archive prefix is kept in the file
+  name and the DOI, and two legacy papers no longer collide.
+- Every arXiv record claimed `arxiv-nonexclusive-distrib`. arXiv lets a submitter
+  choose CC BY, CC BY-SA, CC0 and others, so it was wrong for many papers. The
+  `arxiv:license` arXiv reports is used; when it reports none, the licence is
+  `unknown` rather than a guess.
+
 - A repository file called `manifest.json` was overwritten by our manifest, and
   one called `x.part` was swallowed by `x`'s sidecar (`x` ended up with mixed
   bytes and `x.part` disappeared). The names the tool itself writes are reserved
