@@ -242,3 +242,39 @@ def test_the_recorded_payload_matches_the_stored_bytes():
     assert hashlib.md5(stored).hexdigest() == MD5
     assert payload["files"][0]["computed_md5"] == MD5
     assert payload["files"][0]["size"] == len(stored)
+
+
+# -- direct: lower-case response headers -----------------------------------
+
+
+class HeadClient(FakeClient):
+    def __init__(self, headers: dict):
+        super().__init__({})
+        self._headers = headers
+
+    def head(self, url):
+        return self._headers
+
+
+def test_direct_reads_lower_case_headers():
+    rec = direct.resolve(
+        HeadClient(
+            {
+                "content-length": "5",
+                "content-disposition": 'attachment; filename="x.csv"',
+                "content-md5": "XUFAKrxLKna5cZ2REBfFkg==",
+            }
+        ),
+        "https://h/a",
+    )
+    (only,) = rec.files
+    assert only.size == 5
+    assert only.name == "x.csv"
+    assert only.checksum == "md5:5d41402abc4b2a76b9719d911017c592"
+    assert only.checksum_source == "header"
+
+
+def test_direct_without_headers_has_no_size_or_source():
+    rec = direct.resolve(HeadClient({}), "https://h/a.csv")
+    (only,) = rec.files
+    assert only.size is None and only.checksum is None and only.checksum_source is None

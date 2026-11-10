@@ -35,7 +35,7 @@ lists gets a row, whether or not this run asked for it.
 | `retrieved_at` | RFC 3339 \| null | When the last byte (or the failure) arrived. |
 | `size` | int \| null | Published size, when there is one. |
 | `checksum` | string \| null | `algo:hex`, as published. |
-| `checksum_source` | string \| null | `"cli"` when `--checksum` supplied it; `null` means the source did or nobody did. |
+| `checksum_source` | string \| null | `"cli"` for `--checksum`, `"header"` when the server sent one, `null` for a published checksum or none. |
 | `sha256` | string \| null | Hash of the bytes on disk, computed after the transfer. |
 | `bytes` | int | Bytes written by this run. |
 | `state` | string | See below. |
