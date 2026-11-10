@@ -409,6 +409,22 @@ def check_disk(files, out: Path, *, margin: int = DISK_MARGIN) -> tuple[int, int
     return (free, needed)
 
 
+def _reserved(files) -> set[str]:  # noqa: ANN001
+    """Names the tool itself will write, so a repository file cannot take them.
+
+    A file the repository happens to call ``manifest.json`` was overwritten by
+    our manifest, and a file called ``x.part`` was swallowed by ``x``'s sidecar.
+    Reserving the derived names is cheaper than teaching every later step to
+    dodge them.
+    """
+    reserved = {"manifest.json", "manifest.json.tmp"}
+    for file in files:
+        name = naming.sanitize(file.name).lower()
+        reserved.add(name + ".part")
+        reserved.add(name + META_SUFFIX)
+    return reserved
+
+
 def _already_there(final: Path, name: str, file: File, opts: Options) -> bool | None:
     """Whether an existing file may stand in for this one.
 
@@ -627,7 +643,7 @@ def _fetch_record(
         check_disk(files, opts.out)
         opts.trusted = _trusted_urls(opts.out / "manifest.json")
 
-    taken: set[str] = set()
+    taken = _reserved(files)
     lock = threading.Lock()
     results: list[Result] = []
     opts.interrupted = False
