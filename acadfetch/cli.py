@@ -124,6 +124,7 @@ def _client(args: argparse.Namespace) -> Client:
         rate=args.rate,
         retries=args.retries,
         block_retries=args.retry_403,
+        allow_http=args.allow_http,
         headers=_headers(args.header),
         auth={source: token.headers for source, token in tokens.items()},
     )
@@ -544,6 +545,11 @@ def build_parser() -> argparse.ArgumentParser:
             action="append",
             metavar="NAME:VALUE",
             help="extra request header, repeatable (e.g. 'Authorization: Bearer <token>')",
+        )
+        p.add_argument(
+            "--allow-http",
+            action="store_true",
+            help="keep Authorization on an https -> http redirect hop",
         )
         p.add_argument(
             "--no-token",

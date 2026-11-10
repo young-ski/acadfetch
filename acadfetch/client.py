@@ -13,6 +13,7 @@ import email.utils
 import hashlib
 import json
 import random
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -59,14 +60,16 @@ def _blocked_detail(detail: str, retries: int | None) -> str:
 
 
 class RedirectPolicy(urllib.request.HTTPRedirectHandler):
-    """Keep a bearer token on its own origin, and note a downgrade to http.
+    """Keep credentials on their own origin, and off a plain-http hop.
 
     urllib copies every header onto the redirect, so a token issued for Zenodo
-    would travel to whatever host it points at -- and to a plain-http URL if it
-    redirects that way.
+    would travel to whatever host it points at -- and across the wire in clear
+    if the hop is ``https`` -> ``http``. ``--allow-http`` keeps the header on
+    such a hop for mirrors that need it.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, allow_http: bool = False) -> None:
+        self.allow_http = allow_http
         self.downgrades: list[tuple[str, str]] = []
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ANN201
@@ -76,11 +79,32 @@ class RedirectPolicy(urllib.request.HTTPRedirectHandler):
         before = urllib.parse.urlsplit(req.full_url)
         after = urllib.parse.urlsplit(new.full_url)
         if (before.hostname, before.port) != (after.hostname, after.port):
-            # A different origin has no business seeing this token.
-            new.remove_header("Authorization")
+            # A different origin has no business seeing the credentials.
+            for header in ("Authorization", "Cookie", "Proxy-Authorization"):
+                _drop_header(new, header)
         if after.scheme == "http" and before.scheme == "https":
             self.downgrades.append((req.full_url, new.full_url))
+            if self.allow_http:
+                note = "credentials kept (--allow-http)"
+            else:
+                _drop_header(new, "Authorization")
+                note = "credentials dropped (use --allow-http to keep them)"
+            print(
+                f"acadfetch: https -> http at {after.hostname}; {note}",
+                file=sys.stderr,
+            )
         return new
+
+
+def _drop_header(req, name: str) -> None:  # noqa: ANN001
+    """Delete a header whatever case it was stored under.
+
+    ``Request.add_header`` capitalises only the first letter, so
+    ``remove_header("Proxy-Authorization")`` misses ``Proxy-authorization``.
+    """
+    for store in (req.headers, req.unredirected_hdrs):
+        for key in [k for k in store if k.lower() == name.lower()]:
+            del store[key]
 
 
 def _carries_its_own_auth(url: str) -> bool:
@@ -118,6 +142,7 @@ class Client:
         headers: Mapping[str, str] | None = None,
         auth: Mapping[str, Mapping[str, str]] | None = None,
         block_retries: int = consts.WAF_403_RETRIES,
+        allow_http: bool = False,
     ) -> None:
         self.bucket = TokenBucket(rate)
         self.retries = max(0, retries)
@@ -131,7 +156,7 @@ class Client:
         # so a Zenodo token is never sent to another source's host.
         self.auth = {k: dict(v) for k, v in (auth or {}).items()}
         self.source: str | None = None
-        self.redirects = RedirectPolicy()
+        self.redirects = RedirectPolicy(allow_http=allow_http)
         self.opener = urllib.request.build_opener(self.redirects)
 
     # -- internals ---------------------------------------------------------

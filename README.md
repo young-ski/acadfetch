@@ -156,8 +156,10 @@ Exit codes: `0` success, `1` failure, `2` partial, `64` bad usage, `130` interru
 `ZENODO_TOKEN` is read from the environment and sent only to Zenodo, so a token
 never travels to a host that has no business seeing it -- including across a
 redirect: a hop to another host (a storage CDN, a download mirror) goes out
-without it, and a presigned URL gets no `Authorization` at all, because S3
-rejects a request that carries both. `--header` still overrides, `--no-token`
+without it, a hop from https to http drops it with a warning (`--allow-http`
+keeps it), and a presigned URL gets no `Authorization` at all, because S3
+rejects a request that carries both. Cookies and proxy credentials are dropped
+on any cross-origin hop as well. `--header` still overrides, `--no-token`
 ignores the environment, and the manifest records the variable name plus the
 last four characters only:
 
