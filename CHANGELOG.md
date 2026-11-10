@@ -6,6 +6,8 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-10
+
 ### Changed
 
 - A usage error (a bad flag value, a missing target) exits `64` instead of `2`.
@@ -23,6 +25,10 @@ pre-1.0: a minor bump may break a flag.
 - `verify --json` counts `skipped` in `summary`, keeps `sha256` in its rows, and
   reports `ok_run: false` for an empty manifest.
 
+- Schema 2 stays the readable shape of the 0.1.1 era (name on disk,
+  `verified_reason`), and `verify` still warns about schema 1. Nothing written
+  before 0.2.0 has to be re-fetched to be verified.
+
 ### Removed
 
 - figshare support. Its API's WAF block page was the most fragile corner of
@@ -39,6 +45,28 @@ pre-1.0: a minor bump may break a flag.
   refused before any request when malformed, recorded in the manifest with
   `checksum_source: "cli"`. This is the migration path for a removed source and
   a way to get strong verification out of a direct URL.
+
+- A run that cannot fit is refused before the first byte is transferred,
+  naming the shortfall and keeping 64 MiB spare. What is already on disk is
+  subtracted, so a resume is judged on its remainder instead of the whole record.
+  A dry run reports free space and marks a shortfall instead of failing.
+- Each finished file is flushed before the rename, so the rename cannot outrun
+  the bytes. `--no-fsync` turns it off for speed.
+
+- `fetch --json` and `verify --json` print one report document to stdout and
+  send progress to stderr, so `jq` sees JSON and nothing else. Exit codes are
+  unchanged, an early failure still yields a document with `error`, and a failed
+  transfer names the `part` file it kept. `report` versions the shape; fields are
+  append-only.
+- A checksum mismatch sets `verified: false` instead of leaving it `null`, which
+  is also what makes the human `[CHECKSUM MISMATCH]` marker appear.
+- Manifest rows carry `final_url`, `etag`, `http_status` and `retrieved_at`, so a
+  year later the record says where the bytes came from, what validator they
+  carried and when they arrived, not only what was asked for.
+- Credential query parameters (`X-Amz-Signature`, `X-Amz-Credential`, `token`, …)
+  are stripped from the manifest, the JSON report, error lines and the default
+  directory name; `url_redacted` records that it happened and
+  `--record-full-url` keeps the original string.
 
 ### Fixed
 
@@ -115,29 +143,18 @@ pre-1.0: a minor bump may break a flag.
 - `-n` prints the directory it would write to, which is how the default
   `acadfetch-out/` stops being a surprise.
 
-### Added
-
-- A run that cannot fit is refused before the first request (`reason="disk"`),
-  naming the shortfall and keeping 64 MiB spare. What is already on disk is
-  subtracted, so a resume is judged on its remainder instead of the whole record.
-  A dry run reports free space and marks a shortfall instead of failing.
-- Each finished file is flushed before the rename, so the rename cannot outrun
-  the bytes. `--no-fsync` turns it off for speed.
-
-- `fetch --json` and `verify --json` print one report document to stdout and
-  send progress to stderr, so `jq` sees JSON and nothing else. Exit codes are
-  unchanged, an early failure still yields a document with `error`, and a failed
-  transfer names the `part` file it kept. `report` versions the shape; fields are
-  append-only.
-- A checksum mismatch sets `verified: false` instead of leaving it `null`, which
-  is also what makes the human `[CHECKSUM MISMATCH]` marker appear.
-- Manifest rows carry `final_url`, `etag`, `http_status` and `retrieved_at`, so a
-  year later the record says where the bytes came from, what validator they
-  carried and when they arrived, not only what was asked for.
-- Credential query parameters (`X-Amz-Signature`, `X-Amz-Credential`, `token`, …)
-  are stripped from the manifest, the JSON report, error lines and the default
-  directory name; `url_redacted` records that it happened and
-  `--record-full-url` keeps the original string.
+- A single 1 s gap in a response body ended the transfer: `socket.SocketIO`
+  latches its first timeout and then refuses every later read, so a stall on a
+  slow or mobile link cost the whole file. The latch is cleared on each poll
+  timeout. Measured on a 1 MiB/s link with one 2 s stall: 0/3 before, 3/3 after,
+  no retries needed.
+- `IncompleteRead` from a body cut short is an `HTTPException`, not an
+  `OSError`, so it escaped the retry loop and the CLI as a traceback and took
+  the rest of the batch with it.
+- A spent retry budget deleted the `.part`, the opposite of what this README
+  and the "flaky VPN at 80%" pitch promise. The partial is kept now, its size is
+  reported instead of `0 B`, and the failure names the file so a rerun resumes.
+  Bytes that cannot be trusted -- a checksum mismatch -- are still dropped.
 
 ### Security
 
@@ -197,42 +214,18 @@ pre-1.0: a minor bump may break a flag.
   is resolved first. The progress line's pipe behaviour is described with the
   extra frame it actually emits per file.
 
-- The usage block was four placeholders deep: two of the first three ids did not
-  resolve. It now leads with four real records, says which ones are placeholders,
-  and offers `uvx` so a first run needs no install at all.
+- The usage block was placeholder-deep: two of the first three ids did not
+  resolve. It leads with three real targets plus a real direct URL, labels the
+  remaining placeholders, and offers `uvx` so a first run needs no install.
 - `docs/troubleshooting.md` indexes the failures people actually hit (stall, DNS
   blackhole, figshare 403, block page, `MISMATCH`, escaped names, long paths) and
   what to do about each.
-- README no longer over-promises: `figshare` is marked experimental, the
-  progress line's piped behaviour matches what it does, and the
-  "resume keeps the partial" claim is true now rather than aspirational.
+- README no longer over-promises: the progress line's piped behaviour matches
+  what it does, and the "resume keeps the partial" claim is true rather than
+  aspirational.
 - `acadfetch-out/` is in `.gitignore`; `-n` prints it.
 - CONTRIBUTING lists the three gates CI actually runs (coverage floor and
   `-W error` were local-green-but-CI-red traps).
-
-### Changed
-
-- `manifest.json` is schema 2. It records the file name **on disk** rather than
-  the repository's name, so a record with two files of the same name no longer
-  produces a manifest that reports MISMATCH on correct bytes, and it carries
-  `verified_reason` so `verified: null` distinguishes "no checksum published"
-  from "published but unparseable". Schema 1 still reads and `verify` warns
-  about it.
-
-### Fixed
-
-- A single 1 s gap in a response body ended the transfer: `socket.SocketIO`
-  latches its first timeout and then refuses every later read, so a stall on a
-  slow or mobile link cost the whole file. The latch is cleared on each poll
-  timeout. Measured on a 1 MiB/s link with one 2 s stall: 0/3 before, 3/3 after,
-  no retries needed.
-- `IncompleteRead` from a body cut short is an `HTTPException`, not an
-  `OSError`, so it escaped the retry loop and the CLI as a traceback and took
-  the rest of the batch with it.
-- A spent retry budget deleted the `.part`, the opposite of what this README
-  and the "flaky VPN at 80%" pitch promise. The partial is kept now, its size is
-  reported instead of `0 B`, and the failure names the file so a rerun resumes.
-  Bytes that cannot be trusted -- a checksum mismatch -- are still dropped.
 
 ## [0.1.1] - 2026-10-26
 
@@ -289,6 +282,7 @@ pre-1.0: a minor bump may break a flag.
 - `SECURITY.md`, a bug template, a PR template with the invariants as a
   checklist, `CODEOWNERS`, a first-PR path in `CONTRIBUTING.md`.
 
+## [0.1.0] - 2026-10-25
 
 First release. Nothing here has a previous behaviour to be compatible with,
 so it is all "Added" — the list doubles as an honest statement of scope.
@@ -328,12 +322,12 @@ so it is all "Added" — the list doubles as an honest statement of scope.
 
 ### Known limits
 
-- Windows ARM and Python 3.15 are untested.
+- Windows ARM and the free-threaded build (3.15t) are untested.
 - macOS is best effort: it runs in CI but does not block a release.
 - Tokens come from the environment only: no interactive login, no refresh.
 - No search or pagination — you bring the target.
-- figshare was verified end to end from a Japanese network only; the API's
-  WAF answers 403 outright from some networks (see `--retry-403`).
+- figshare was removed in 0.2.0; its API's WAF answered 403 outright from some
+  networks (see `--retry-403`).
 
 [Unreleased]: https://github.com/young-ski/acadfetch/compare/v0.1.1...HEAD
 [0.1.1]: https://github.com/young-ski/acadfetch/releases/tag/v0.1.1

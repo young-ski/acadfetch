@@ -104,3 +104,8 @@ jobs:
           acadfetch --version
           acadfetch sources
           acadfetch fetch arxiv:1706.03762 -n
+      - name: It downloads and verifies real bytes
+        # A dry run proves nothing about transfer, rename or manifest.
+        run: |
+          acadfetch fetch 10.5281/zenodo.23612969 -q
+          acadfetch verify acadfetch-out/zenodo-*/manifest.json
