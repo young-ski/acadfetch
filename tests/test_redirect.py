@@ -61,8 +61,8 @@ def test_a_presigned_url_gets_no_authorization_header(server, tmp_path):
     assert server.cfg["auth_seen"] == [None]
 
 
-def test_an_https_to_http_downgrade_is_recorded():
-    """http still works, but it has to be visible that the hop is unprotected."""
+def test_an_https_to_http_downgrade_drops_the_token(capsys):
+    """Same origin is not enough: http is clear text, so the token goes."""
     policy = RedirectPolicy()
     req = urllib.request.Request("https://example.org/a", headers={"Authorization": "Bearer x"})
 
@@ -70,4 +70,53 @@ def test_an_https_to_http_downgrade_is_recorded():
 
     assert new is not None
     assert policy.downgrades == [("https://example.org/a", "http://example.org/b")]
-    assert new.headers.get("Authorization") == "Bearer x", "same origin keeps the token"
+    assert new.headers.get("Authorization") is None
+    assert "credentials dropped" in capsys.readouterr().err
+
+
+def test_allow_http_keeps_the_token(capsys):
+    policy = RedirectPolicy(allow_http=True)
+    req = urllib.request.Request("https://example.org/a", headers={"Authorization": "Bearer x"})
+
+    new = policy.redirect_request(req, None, 302, "Found", {}, "http://example.org/b")
+
+    assert new is not None and new.headers.get("Authorization") == "Bearer x"
+    assert "credentials kept" in capsys.readouterr().err
+
+
+def test_another_host_loses_cookies_too():
+    policy = RedirectPolicy()
+    req = urllib.request.Request(
+        "https://example.org/a",
+        headers={
+            "Authorization": "Bearer x",
+            "Cookie": "session=1",
+            "Proxy-Authorization": "b",
+            "User-Agent": "ua",
+        },
+    )
+
+    new = policy.redirect_request(req, None, 302, "Found", {}, "https://other.example/b")
+
+    assert new is not None
+    for header in ("Authorization", "Cookie", "Proxy-Authorization"):
+        assert new.headers.get(header) is None
+    assert new.headers.get("User-agent")
+
+
+def test_a_same_scheme_same_origin_hop_keeps_everything():
+    policy = RedirectPolicy()
+    req = urllib.request.Request(
+        "https://example.org/a", headers={"Authorization": "Bearer x", "Cookie": "session=1"}
+    )
+
+    new = policy.redirect_request(req, None, 302, "Found", {}, "https://example.org/b")
+
+    assert new is not None
+    assert new.headers.get("Authorization") == "Bearer x"
+    assert new.headers.get("Cookie") == "session=1"
+
+
+def test_the_client_flag_reaches_the_policy():
+    assert Client(rate=1000, allow_http=True).redirects.allow_http is True
+    assert Client(rate=1000).redirects.allow_http is False

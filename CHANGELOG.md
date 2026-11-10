@@ -141,6 +141,12 @@ pre-1.0: a minor bump may break a flag.
 
 ### Security
 
+- A redirect that stayed on the same host but dropped from `https` to `http`
+  kept the `Authorization` header, so the token went out in clear text. It is
+  removed now, with a warning naming the host; `--allow-http` keeps it for a
+  mirror that needs it. A cross-origin hop also drops `Cookie` and
+  `Proxy-Authorization`, which used to travel to every redirect target.
+
 - `urllib` copies every header onto a redirect, so `ZENODO_TOKEN` followed a
   download to whatever host the API pointed at, contradicting the README. A
   redirect that leaves the origin now drops `Authorization`, and a presigned URL
