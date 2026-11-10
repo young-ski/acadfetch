@@ -21,6 +21,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from http.client import HTTPException
 from pathlib import Path
 
@@ -70,6 +71,17 @@ _BINARY_EXT = frozenset(
 META_SUFFIX = ".part.meta.json"
 
 
+@dataclass(frozen=True)
+class Transfer:
+    """What one attempt actually did, for the manifest's provenance fields."""
+
+    written: int = 0
+    final_url: str | None = None
+    etag: str | None = None
+    http_status: int | None = None
+    retrieved_at: str | None = None
+
+
 @dataclass
 class Options:
     out: Path
@@ -98,6 +110,11 @@ def _abort_open_transfers() -> None:
     for resp in live:
         with contextlib.suppress(Exception):  # noqa: BLE001 - closing is best effort
             resp.close()
+
+
+def _now() -> str:
+    """RFC 3339 UTC, second resolution: what the manifest records."""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _read_meta(path: Path) -> dict:
@@ -209,8 +226,8 @@ def _chunks(resp, idle_timeout: float, url: str):  # noqa: ANN001, ANN202
         yield chunk
 
 
-def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Options) -> int:
-    """Move bytes into ``part``, resuming if possible. Returns bytes written."""
+def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Options) -> Transfer:
+    """Move bytes into ``part``, resuming if possible. Returns what happened."""
     meta = _read_meta(meta_path) if part.exists() else {}
     if meta.get("url") not in (None, file.url):
         _drop(part, meta_path)
@@ -229,14 +246,13 @@ def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Opt
             headers["If-Range"] = validator
 
     written = 0
-    resumed = 0
     # One attempt here: the caller owns the retry budget for bytes, because it
     # is the one that knows about resume points and fallback URLs.
     try:
         resp = client.open(file.url, headers, attempts=1)
     except HttpError as exc:
         if exc.status == 416 and have:
-            return 0  # already complete
+            return Transfer(0)  # already complete
         raise
 
     with resp:
@@ -267,7 +283,7 @@ def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Opt
         if whole:
             mode, offset = "wb", 0
         else:
-            mode, offset, resumed = "ab", have, have
+            mode, offset = "ab", have
         _write_meta(
             meta_path,
             {
@@ -318,9 +334,13 @@ def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Opt
                 _LIVE.discard(resp)
         if declared is not None and declared != written:
             raise HttpError(0, file.url, f"read {written} bytes, response declared {declared}")
-    if resumed:
-        return written
-    return written
+        return Transfer(
+            written=written,
+            final_url=resp.geturl() or file.url,
+            etag=resp.headers.get("ETag"),
+            http_status=status,
+            retrieved_at=_now(),
+        )
 
 
 DISK_MARGIN = 64 * 1024 * 1024
@@ -432,6 +452,7 @@ def _attempt(
     endpoint for the same bytes). Everything else terminal fails immediately.
     """
     last: Exception | None = None
+    info: Transfer | None = None
     blocked = 0
     candidates = [file.url, *file.fallbacks]
     done = False
@@ -439,7 +460,7 @@ def _attempt(
         source = file if url == file.url else replace(file, url=url)
         for attempt in range(opts.retries + 1):
             try:
-                _transfer(client, source, part, meta_path, opts)
+                info = _transfer(client, source, part, meta_path, opts)
                 done = True
                 break
             except HttpError as exc:
@@ -451,7 +472,13 @@ def _attempt(
                     # Do not leave an over-limit part for the next run to
                     # resume straight back into the same wall.
                     _drop(part, meta_path)
-                    return Result(file=file, state="failed", error=str(exc))
+                    return Result(
+                        file=file,
+                        state="failed",
+                        error=str(exc),
+                        http_status=exc.status,
+                        retrieved_at=_now(),
+                    )
                 if exc.status == 403 and exc.transient and blocked < client.block_retries:
                     blocked += 1
                 elif exc.status in (401, 403, 404, 410):
@@ -476,10 +503,18 @@ def _attempt(
             error=f"{last}{_hint(last)}",
             bytes=_kept_bytes(part),
             part=str(part) if _kept_bytes(part) else None,
+            http_status=getattr(last, "status", None),
+            retrieved_at=_now(),
         )
 
     if last is not None and not part.exists():
-        return Result(file=file, state="failed", error=str(last))
+        return Result(
+            file=file,
+            state="failed",
+            error=str(last),
+            http_status=getattr(last, "status", None),
+            retrieved_at=_now(),
+        )
 
     if file.size is not None and part.exists() and part.stat().st_size != file.size:
         return Result(
@@ -487,16 +522,24 @@ def _attempt(
             state="failed",
             error=f"size mismatch (want {file.size})",
             bytes=part.stat().st_size,
+            http_status=info.http_status if info else None,
+            retrieved_at=_now(),
         )
 
     verdict = verify.matches(part, file.checksum)
     if verdict is False:
         _drop(part, meta_path)
         try:
-            _transfer(client, file, part, meta_path, opts)
+            info = _transfer(client, file, part, meta_path, opts)
             verdict = verify.matches(part, file.checksum)
         except Exception as exc:  # noqa: BLE001
-            return Result(file=file, state="failed", error=f"re-download failed: {exc}{_hint(exc)}")
+            return Result(
+                file=file,
+                state="failed",
+                error=f"re-download failed: {exc}{_hint(exc)}",
+                http_status=getattr(exc, "status", None),
+                retrieved_at=_now(),
+            )
         if verdict is False:
             _drop(part, meta_path)
             # verified=False is what makes the mismatch legible downstream, not
@@ -512,6 +555,10 @@ def _attempt(
         bytes=final.stat().st_size,
         verified=verdict,
         resumed_from=resumed_from,
+        final_url=info.final_url if info else None,
+        etag=info.etag if info else None,
+        http_status=info.http_status if info else None,
+        retrieved_at=info.retrieved_at if info else _now(),
     )
 
 

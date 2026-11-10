@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -219,3 +220,54 @@ def test_require_all_in_json_is_a_failure(served, capsys, tmp_path):
     assert code == cli.EXIT_FAIL
     assert doc["summary"]["bad"] == 1
     assert doc["summary"]["ok_run"] is False
+
+
+# -- schema 3: credential query parameters --------------------------------
+
+
+def _signed_record(server):
+    signed = server.base + "/a.bin?X-Amz-Signature=SECRET&Expires=1"
+
+    def resolve(_client, _target):
+        return Record(
+            source="direct",
+            target=signed,
+            landing=signed,
+            files=[File(signed, "a.bin", 10)],
+        )
+
+    server.cfg["files"]["/a.bin"] = b"x" * 10
+    return resolve
+
+
+def test_json_redacts_a_presigned_url(server, monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(cli.registry, "resolve", _signed_record(server))
+
+    code, out, _ = _run(capsys, "fetch", "signed", "--json", "-o", tmp_path)
+
+    doc = json.loads(out)
+    assert code == cli.EXIT_OK
+    assert "SECRET" not in out
+    assert doc["url_redacted"] is True
+    assert doc["files"][0]["http_status"] == 200
+    assert doc["files"][0]["final_url"].startswith(server.base)
+
+
+def test_record_full_url_keeps_the_signature(server, monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(cli.registry, "resolve", _signed_record(server))
+
+    code, out, _ = _run(capsys, "fetch", "signed", "--json", "--record-full-url", "-o", tmp_path)
+
+    assert code == cli.EXIT_OK
+    assert "SECRET" in out
+    assert json.loads(out)["url_redacted"] is False
+
+
+def test_the_default_directory_drops_the_query(server, monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(cli.registry, "resolve", _signed_record(server))
+    monkeypatch.chdir(tmp_path)
+
+    code, out, _ = _run(capsys, "fetch", "signed", "--json", "-n")
+
+    assert code == cli.EXIT_OK
+    assert json.loads(out)["out"] == str(Path("acadfetch-out") / "direct-a.bin")

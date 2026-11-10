@@ -57,6 +57,13 @@ pre-1.0: a minor bump may break a flag.
   append-only.
 - A checksum mismatch sets `verified: false` instead of leaving it `null`, which
   is also what makes the human `[CHECKSUM MISMATCH]` marker appear.
+- Manifest rows carry `final_url`, `etag`, `http_status` and `retrieved_at`, so a
+  year later the record says where the bytes came from, what validator they
+  carried and when they arrived, not only what was asked for.
+- Credential query parameters (`X-Amz-Signature`, `X-Amz-Credential`, `token`, …)
+  are stripped from the manifest, the JSON report, error lines and the default
+  directory name; `url_redacted` records that it happened and
+  `--record-full-url` keeps the original string.
 
 ### Security
 
