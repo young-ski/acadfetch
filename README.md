@@ -125,12 +125,23 @@ Progress is one aggregate line for the whole run
 When stdout is a pipe it is rewritten as a fresh whole line at most every 5 s, so
 a CI log stays greppable without becoming a wall. `-q` turns it off.
 
-Output defaults to `acadfetch-out/<source>-<doi-or-id>`, and `-n` prints it before
+Output defaults to `acadfetch-out/<source>-<id>` (a URL adds its host and a short
+hash), and `-n` prints it before
 you spend bandwidth. Files land in `<name>.part` and are renamed only after the
 checksum matches, so an interrupted or failed run never leaves something that
 *looks* finished -- and never throws away the bytes it already paid for: rerun and
 it resumes. `acadfetch-out/` is worth adding to a project's `.gitignore`; this
 repository already has it.
+
+The default directory names the target, not only its filename — `data.csv` from
+two hosts is two datasets, and they do not share a directory. A file already
+there is reused when its checksum matches; with no checksum, the size plus one
+more tie (an explicit `-o`, or a manifest in that directory that recorded the
+same URL) is required, and `--force` skips the question entirely.
+
+A DOI that resolves to a web page instead of a file is refused, naming the
+page: fetching the landing page as if it were the dataset is how a repository's
+front door ends up being cited as a data file.
 
 A run that cannot fit is refused before the first request, naming the shortfall:
 `needs 41.2 GiB but 12.0 GiB is free`. What is already on disk is subtracted, so

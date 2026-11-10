@@ -54,4 +54,5 @@ def resolve(client: Client, target: str) -> Record:
         title=filename_from(target, headers),
         publisher=urlsplit(target).hostname or "",
         landing=target,
+        content_type=header_value(headers, "Content-Type") or "",
     )

@@ -27,6 +27,8 @@ class Record:
     publisher: str = ""
     version: str = ""
     landing: str = ""
+    #: Content-Type of the resolved landing URL, when an adapter saw one.
+    content_type: str = ""
 
     @property
     def total_bytes(self) -> int | None:

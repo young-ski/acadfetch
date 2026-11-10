@@ -270,4 +270,6 @@ def test_the_default_directory_drops_the_query(server, monkeypatch, capsys, tmp_
     code, out, _ = _run(capsys, "fetch", "signed", "--json", "-n")
 
     assert code == cli.EXIT_OK
-    assert json.loads(out)["out"] == str(Path("acadfetch-out") / "direct-a.bin")
+    slug = Path(json.loads(out)["out"]).name
+    assert slug.startswith("direct-127.0.0.1-") and slug.endswith("-a.bin")
+    assert "SECRET" not in slug
