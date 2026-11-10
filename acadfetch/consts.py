@@ -1,6 +1,6 @@
 """Package-wide constants and version."""
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 USER_AGENT = f"acadfetch/{__version__} (+https://github.com/young-ski/acadfetch)"
 
