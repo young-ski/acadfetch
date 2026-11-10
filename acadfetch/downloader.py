@@ -20,7 +20,7 @@ import shutil
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.client import HTTPException
 from pathlib import Path
@@ -447,56 +447,45 @@ def _attempt(
 ) -> Result:
     """Retry loop, verification and final rename for one file.
 
-    A 403 that looks like a WAF block page is retried a couple of times with
-    the partial file kept, then the file's fallback URLs are tried (a legacy
-    endpoint for the same bytes). Everything else terminal fails immediately.
+    A 403 that looks like a CDN block page is retried a couple of times with the
+    partial file kept. Everything else terminal fails immediately.
     """
     last: Exception | None = None
     info: Transfer | None = None
     blocked = 0
-    candidates = [file.url, *file.fallbacks]
-    done = False
-    for index, url in enumerate(candidates):
-        source = file if url == file.url else replace(file, url=url)
-        for attempt in range(opts.retries + 1):
-            try:
-                info = _transfer(client, source, part, meta_path, opts)
-                done = True
-                break
-            except HttpError as exc:
-                last = exc
-                if exc.reason == "html-page":
-                    # Markup is not the file, so it must not be resumed onto.
-                    _drop(part, meta_path)
-                if exc.reason == "max-size":
-                    # Do not leave an over-limit part for the next run to
-                    # resume straight back into the same wall.
-                    _drop(part, meta_path)
-                    return Result(
-                        file=file,
-                        state="failed",
-                        error=str(exc),
-                        http_status=exc.status,
-                        retrieved_at=_now(),
-                    )
-                if exc.status == 403 and exc.transient and blocked < client.block_retries:
-                    blocked += 1
-                elif exc.status in (401, 403, 404, 410):
-                    break  # terminal for this URL; a fallback may still work
-            except (*HTTP_EXC, OSError, ConnectionError, ValueError) as exc:
-                # ValueError: the response was closed under us by an interrupt.
-                last = exc
-            if _STOP.is_set():
-                return Result(file=file, state="failed", error="interrupted")
-            if attempt < opts.retries:
-                time.sleep(min(2**attempt, 10) * (0.7 + random.random() * 0.6))
-                resumed_from = part.stat().st_size if part.exists() else 0
-        if done:
+    for attempt in range(opts.retries + 1):
+        try:
+            info = _transfer(client, file, part, meta_path, opts)
             break
-        if index < len(candidates) - 1:
-            _drop(part, meta_path)
-            resumed_from = 0
-            continue
+        except HttpError as exc:
+            last = exc
+            if exc.reason == "html-page":
+                # Markup is not the file, so it must not be resumed onto.
+                _drop(part, meta_path)
+            if exc.reason == "max-size":
+                # Do not leave an over-limit part for the next run to
+                # resume straight back into the same wall.
+                _drop(part, meta_path)
+                return Result(
+                    file=file,
+                    state="failed",
+                    error=str(exc),
+                    http_status=exc.status,
+                    retrieved_at=_now(),
+                )
+            if exc.status == 403 and exc.transient and blocked < client.block_retries:
+                blocked += 1
+            elif exc.status in (401, 403, 404, 410):
+                break  # terminal
+        except (*HTTP_EXC, OSError, ConnectionError, ValueError) as exc:
+            # ValueError: the response was closed under us by an interrupt.
+            last = exc
+        if _STOP.is_set():
+            return Result(file=file, state="failed", error="interrupted")
+        if attempt < opts.retries:
+            time.sleep(min(2**attempt, 10) * (0.7 + random.random() * 0.6))
+            resumed_from = part.stat().st_size if part.exists() else 0
+    else:
         return Result(
             file=file,
             state="failed",

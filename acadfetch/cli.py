@@ -16,12 +16,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import auth, consts, manifest, naming, urls
+from . import auth, consts, manifest, naming, urls, verify
 from .client import Client
 from .downloader import Options, check_disk, check_total, fetch_record, human
 from .errors import AcFError, PartialError, TargetError
 from .progress import Progress
-from .sources import doi, registry
+from .sources import doi, registry, removed
 from .verify import reason as verify_reason
 
 EXIT_OK, EXIT_FAIL, EXIT_PARTIAL, EXIT_INTERRUPT = 0, 1, 2, 130
@@ -30,7 +30,6 @@ EXIT_OK, EXIT_FAIL, EXIT_PARTIAL, EXIT_INTERRUPT = 0, 1, 2, 130
 REPORT_SCHEMA = 2
 EXAMPLES = {
     "zenodo": "zenodo:123456",
-    "figshare": "figshare:987654",
     "arxiv": "arxiv:2401.12345",
     "doi": "10.5281/zenodo.123456",
     "direct": "https://example.org/data.tar.gz",
@@ -38,14 +37,13 @@ EXAMPLES = {
 EPILOG = """target forms:
   10.5281/zenodo.123456        a DOI
   zenodo:123456                a record id
-  figshare:987654
   arxiv:2401.12345
   https://host/file.tar.gz     any URL
 
 exit codes:
   0 ok    1 failed    2 partial    130 interrupted (partials kept, rerun to resume)
 
-environment: ZENODO_TOKEN, FIGSHARE_TOKEN (sent only to that repository)
+environment: ZENODO_TOKEN (sent only to Zenodo)
 """
 _SIZE = re.compile(r"^(\d+(?:\.\d+)?)\s*([KMGT]i?B?|B?)$", re.I)
 
@@ -100,9 +98,21 @@ def _count(text: str) -> int:
     return value
 
 
+def _checksum(text: str) -> str:
+    """Validate ``--checksum`` before any request is made."""
+    parsed = verify.parse(text)
+    if parsed is None:
+        raise argparse.ArgumentTypeError(f"expected md5:<hex> or sha256:<hex>, got {text!r}")
+    algo, value = parsed
+    if algo not in ("md5", "sha256"):
+        raise argparse.ArgumentTypeError(f"only md5: and sha256: are accepted, got {algo}:")
+    return f"{algo}:{value}"
+
+
 def cmd_sources(_: argparse.Namespace) -> int:
     for name in registry.names():
         print(f"{name:<9} {EXAMPLES.get(name, '')}".rstrip())
+    print(removed.SOURCES_NOTE)
     return EXIT_OK
 
 
@@ -249,6 +259,12 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     started = time.monotonic()
     client = _client(args)
     record = _resolve(args, client)
+    if args.checksum:
+        # Explicit wins over whatever the source published, and over nothing.
+        record = replace(
+            record,
+            files=[replace(f, checksum=args.checksum, checksum_source="cli") for f in record.files],
+        )
     doc = _report(args)
     doc.update(
         target=_hide(record.target, args),
@@ -506,14 +522,14 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument(
             "--no-token",
             action="store_true",
-            help="ignore $ZENODO_TOKEN / $FIGSHARE_TOKEN",
+            help="ignore $ZENODO_TOKEN",
         )
 
     fetch = sub.add_parser("fetch", help="download every file of a record")
     fetch.add_argument(
         "target",
         nargs="?",
-        help="DOI, zenodo:<id>, figshare:<id>, arxiv:<id>, or URL",
+        help="DOI, zenodo:<id>, arxiv:<id>, or URL",
     )
     fetch.add_argument(
         "-o", "--out", help="output directory (default: acadfetch-out/<source>-<id>)"
@@ -527,10 +543,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fetch.add_argument("--max-size", type=parse_size, help="abort above this total, e.g. 500MB")
     fetch.add_argument(
+        "--checksum",
+        type=_checksum,
+        metavar="ALGO:HEX",
+        help="verify against this checksum instead (md5:<hex> or sha256:<hex>), "
+        "for sources that publish none; required when migrating a figshare target",
+    )
+    fetch.add_argument(
         "--only",
         nargs="+",
         metavar="NAME",
-        help="fetch only these file names; put the target first, or the names swallow it",
+        help="fetch only these file names",
     )
     fetch.add_argument("--manifest-out", help="also write the manifest here")
     fetch.add_argument("-n", "--dry-run", action="store_true", help="list what would be fetched")

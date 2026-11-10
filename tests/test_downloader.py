@@ -250,42 +250,6 @@ def test_block_retries_zero_also_stops_the_transfer_retries(server, tmp_path):
     assert server.cfg["hits"]["/a.bin"] == 1
 
 
-def test_fallback_url_is_used_when_the_first_is_refused(server, tmp_path):
-    payload = b"fallback bytes" * 40
-    server.cfg["files"]["/alt.bin"] = payload
-    server.cfg["forbidden"].add("/a.bin")
-    f = File(
-        url=server.base + "/a.bin",
-        name="a.bin",
-        size=len(payload),
-        checksum="sha256:" + hashlib.sha256(payload).hexdigest(),
-        fallbacks=[server.base + "/alt.bin"],
-    )
-    res = downloader.fetch_file(Client(rate=1000, retries=1), f, opts(tmp_path), set())
-    assert res.state == "downloaded"
-    assert res.verified is True
-    assert (tmp_path / "a.bin").read_bytes() == payload
-    assert server.cfg["hits"]["/alt.bin"] == 1
-
-
-def test_fallback_restarts_instead_of_appending(server, tmp_path):
-    payload = b"F" * 400
-    server.cfg["files"]["/alt.bin"] = payload
-    server.cfg["forbidden"].add("/a.bin")
-    (tmp_path / "a.bin.part").write_bytes(b"stale")
-    (tmp_path / "a.bin.part.meta.json").write_text(f'{{"url": "{server.base}/a.bin"}}', "utf-8")
-    f = File(
-        url=server.base + "/a.bin",
-        name="a.bin",
-        size=len(payload),
-        checksum="sha256:" + hashlib.sha256(payload).hexdigest(),
-        fallbacks=[server.base + "/alt.bin"],
-    )
-    res = downloader.fetch_file(Client(rate=1000, retries=1), f, opts(tmp_path), set())
-    assert res.state == "downloaded"
-    assert (tmp_path / "a.bin").read_bytes() == payload
-
-
 # -- a real file against the checksum the repository published ------------
 
 

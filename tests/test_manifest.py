@@ -334,3 +334,23 @@ def test_a_plain_url_is_not_flagged_as_redacted():
         source="direct", target="https://x/a.csv", files=[File("https://x/a.csv", "a.csv")]
     )
     assert manifest.build(rec, [], planned=True)["url_redacted"] is False
+
+
+def test_a_figshare_manifest_still_verifies(tmp_path):
+    """The adapter is gone; verify reads names and hashes, not sources."""
+    (tmp_path / "a.csv").write_bytes(b"a")
+    import hashlib
+
+    path = tmp_path / "m.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": 2,
+                "source": "figshare",
+                "target": "figshare:1",
+                "files": [{"name": "a.csv", "sha256": hashlib.sha256(b"a").hexdigest()}],
+            }
+        ),
+        "utf-8",
+    )
+    assert manifest.verify_manifest(path, tmp_path)[0]["status"] == "ok"

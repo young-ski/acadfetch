@@ -32,6 +32,7 @@ def test_sources_lists_adapters(capsys):
     assert cli.main(["sources"]) == 0
     out = capsys.readouterr().out
     assert "zenodo" in out and "doi" in out
+    assert "figshare  removed in 0.2.0" in out
 
 
 def test_bad_target_exit_1(capsys):

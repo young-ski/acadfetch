@@ -15,7 +15,6 @@ from dataclasses import dataclass
 # source name -> variable that holds its token
 TOKEN_ENV = {
     "zenodo": "ZENODO_TOKEN",
-    "figshare": "FIGSHARE_TOKEN",
 }
 
 

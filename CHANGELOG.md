@@ -18,6 +18,23 @@ pre-1.0: a minor bump may break a flag.
 - `verify --json` counts `skipped` in `summary`, keeps `sha256` in its rows, and
   reports `ok_run: false` for an empty manifest.
 
+### Removed
+
+- figshare support. Its API's WAF block page was the most fragile corner of
+  `client.py` and bought only a third source. `figshare:N`, `10.6084/…` and
+  article URLs are still recognised and answer with the conversion instead of a
+  generic unknown target; `sources` ends with one line pointing at it. Existing
+  figshare manifests still verify, and `--checksum` restores the check the API
+  used to give ([docs/migration-0.2.md](docs/migration-0.2.md)).
+- `File.fallbacks` (figshare was its only producer) and `FIGSHARE_TOKEN`.
+
+### Added
+
+- `--checksum md5:<hex>|sha256:<hex>`: verify against a checksum you supply,
+  refused before any request when malformed, recorded in the manifest with
+  `checksum_source: "cli"`. This is the migration path for a removed source and
+  a way to get strong verification out of a direct URL.
+
 ### Fixed
 
 - A body served as `text/html` for a `.pdf`/`.zip`/`.csv`/… was written out and

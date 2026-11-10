@@ -28,12 +28,11 @@ SNIPPET = 200
 
 
 def is_block_page(detail: str, content_type: str | None) -> bool:
-    """Tell a WAF/load-balancer 403 apart from the API's own permission 403.
+    """Tell a WAF/load-balancer 403 apart from the application's own 403.
 
     Block pages are HTML or empty (AWS ELB, Cloudflare and friends all ship
-    one — see ``tests/fixtures/figshare_403_block.html``); a repository's real
-    permission error is JSON or plain text from the application itself. Both
-    ``api.figshare.com`` endpoints answer the HTML one intermittently, and it
+    one — see ``tests/fixtures/figshare_403_block.html``); a real permission
+    error is JSON or plain text from the application itself. A block page
     clears within a retry or two, so it must not be terminal.
 
     An empty body counts as a block page: retrying costs one request, while
@@ -125,7 +124,7 @@ class Client:
         self.block_retries = max(0, block_retries)
         self.headers = dict(headers or {})
         # Per-source credentials. The registry sets ``source`` before dispatch
-        # so a Zenodo token is never sent to figshare.
+        # so a Zenodo token is never sent to another source's host.
         self.auth = {k: dict(v) for k, v in (auth or {}).items()}
         self.source: str | None = None
         self.redirects = RedirectPolicy()
