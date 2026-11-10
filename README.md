@@ -148,7 +148,8 @@ A run that cannot fit is refused before the first request, naming the shortfall:
 a resume is judged on the remainder. Each finished file is flushed before its
 rename (`--no-fsync` skips that; it is faster and weaker against a power cut).
 
-Exit codes: `0` success, `1` failure, `2` partial, `130` interrupted (rerun to resume).
+Exit codes: `0` success, `1` failure, `2` partial, `64` bad usage, `130` interrupted
+(rerun to resume).
 
 ## Tokens
 

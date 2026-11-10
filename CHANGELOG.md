@@ -8,6 +8,11 @@ pre-1.0: a minor bump may break a flag.
 
 ### Changed
 
+- A usage error (a bad flag value, a missing target) exits `64` instead of `2`.
+  `2` is "partial success", so a wrapper that retried on `2` used to retry a typo.
+- `--only` that matches nothing lists the file names that do exist, in the human
+  error and in the `--json` document, instead of only saying it did not match.
+
 - `manifest.json` is schema 3. Every row carries `selected`; a `--only` run
   writes `state: "not-selected"` for the files it did not ask for instead of
   `missing`, and `verify` reports those as `skipped`, so a successful partial

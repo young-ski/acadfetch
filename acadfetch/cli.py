@@ -25,7 +25,7 @@ from .progress import Progress
 from .sources import doi, registry, removed
 from .verify import reason as verify_reason
 
-EXIT_OK, EXIT_FAIL, EXIT_PARTIAL, EXIT_INTERRUPT = 0, 1, 2, 130
+EXIT_OK, EXIT_FAIL, EXIT_PARTIAL, EXIT_USAGE, EXIT_INTERRUPT = 0, 1, 2, 64, 130
 #: Bumped only when a field changes meaning or disappears. New fields do not.
 #: 2: file rows carry ``selected``; ``state`` may be ``not-selected``/``planned``.
 REPORT_SCHEMA = 2
@@ -42,7 +42,7 @@ EPILOG = """target forms:
   https://host/file.tar.gz     any URL
 
 exit codes:
-  0 ok    1 failed    2 partial    130 interrupted (partials kept, rerun to resume)
+  0 ok    1 failed    2 partial    64 bad usage    130 interrupted (partials kept, rerun to resume)
 
 environment: ZENODO_TOKEN (sent only to Zenodo)
 """
@@ -245,6 +245,15 @@ def _print_header(record, hide=urls.redact) -> None:  # noqa: ANN001
         print(f"landing : {hide(record.landing)}")
 
 
+def _no_match(record, only, args) -> int:  # noqa: ANN001
+    """An unknown --only name is a failure that can name the candidates."""
+    available = ", ".join(naming.sanitize(f.name) for f in record.files[:8]) or "(none)"
+    message = f"no file matched --only {', '.join(only)}; available: {available}"
+    print(f"acadfetch: {message}", file=sys.stderr)
+    _emit_error(args, message)
+    return EXIT_FAIL
+
+
 def _selected(record, only: list[str] | None):  # noqa: ANN001, ANN202
     if not only:
         return record.files
@@ -305,8 +314,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     if args.dry_run:
         chosen = _selected(record, args.only)
         if not chosen:
-            print(f"acadfetch: no file matched --only {', '.join(args.only)}", file=sys.stderr)
-            return EXIT_FAIL
+            return _no_match(record, args.only, args)
         if args.max_size:
             check_total(replace(record, files=chosen), args.max_size)
         try:
@@ -349,8 +357,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     try:
         results = fetch_record(record, opts, client, only=args.only)
     except PartialError:
-        print(f"acadfetch: no file matched --only {', '.join(args.only)}", file=sys.stderr)
-        return EXIT_FAIL
+        return _no_match(record, args.only, args)
     finally:
         progress.finish()
 
@@ -493,8 +500,16 @@ def _slug(record) -> str:  # noqa: ANN001
     return f"{host}-{digest}-{name}"
 
 
+class Parser(argparse.ArgumentParser):
+    """Usage errors are not "partial": exit 64 keeps 2 meaning a partial run."""
+
+    def error(self, message: str) -> None:  # noqa: D102
+        self.print_usage(sys.stderr)
+        self.exit(EXIT_USAGE, f"{self.prog}: error: {message}\n")
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = Parser(
         prog="acadfetch",
         description="Resumable, rate-limited, checksum-verified bulk downloads from data repositories.",
         epilog=EPILOG,
