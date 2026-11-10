@@ -6,6 +6,18 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
+### Changed
+
+- `manifest.json` is schema 3. Every row carries `selected`; a `--only` run
+  writes `state: "not-selected"` for the files it did not ask for instead of
+  `missing`, and `verify` reports those as `skipped`, so a successful partial
+  fetch no longer fails verification. `acadfetch manifest` writes `planned` for
+  the same reason. `--require-all` counts skipped rows as failures again.
+  Schema 1 and 2 still read; the field and state reference is
+  [docs/manifest.md](docs/manifest.md).
+- `verify --json` counts `skipped` in `summary`, keeps `sha256` in its rows, and
+  reports `ok_run: false` for an empty manifest.
+
 ### Fixed
 
 - A body served as `text/html` for a `.pdf`/`.zip`/`.csv`/… was written out and

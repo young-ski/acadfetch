@@ -156,3 +156,113 @@ def test_a_failed_entry_says_transfer_failed(tmp_path):
     rec = record(tmp_path)
     failed = Result(rec.files[0], "failed", error="HTTP 500", name="a.csv")
     assert manifest.build(rec, [failed])["files"][0]["verified_reason"] == "transfer-failed"
+
+
+# -- schema 3: the record is described, the run is not ----------------
+
+TWO_FILES = (
+    File("https://example/a.csv", "a.csv", 1),
+    File("https://example/b.csv", "b.csv", 1),
+)
+
+
+def two_file_record():
+    return Record(source="zenodo", target="t", files=list(TWO_FILES))
+
+
+def test_unselected_files_are_not_selected_not_missing(tmp_path):
+    """A --only run must not look like a run that lost the other files."""
+    (tmp_path / "a.csv").write_bytes(b"a")
+    rec = two_file_record()
+    results = [
+        Result(rec.files[0], "downloaded", path=str(tmp_path / "a.csv"), bytes=1, name="a.csv")
+    ]
+    data = manifest.build(rec, results, selected_ids={id(rec.files[0])})
+
+    assert data["schema"] == 3
+    assert data["selected_only"] is True
+    assert [(e["state"], e["selected"]) for e in data["files"]] == [
+        ("downloaded", True),
+        ("not-selected", False),
+    ]
+    assert data["files"][1]["verified_reason"] == "not-selected"
+    assert data["files"][1]["sha256"] is None
+
+
+def test_a_full_run_is_not_selected_only(tmp_path):
+    rec = two_file_record()
+    data = manifest.build(rec, [], selected_ids={id(f) for f in rec.files})
+    assert data["selected_only"] is False
+    assert [e["state"] for e in data["files"]] == ["missing", "missing"]
+
+
+def test_a_planned_manifest_says_planned():
+    rec = two_file_record()
+    data = manifest.build(rec, [], planned=True)
+    assert [e["state"] for e in data["files"]] == ["planned", "planned"]
+    assert all(e["selected"] for e in data["files"])
+    assert data["selected_only"] is False
+
+
+def test_verify_skips_not_selected_and_planned_rows(tmp_path):
+    text = json.dumps(
+        {
+            "schema": 3,
+            "files": [
+                {"name": "a.csv", "state": "not-selected", "selected": False},
+                {"name": "b.csv", "state": "planned", "selected": True},
+            ],
+        }
+    )
+    path = tmp_path / "m.json"
+    path.write_text(text, "utf-8")
+    assert [r["status"] for r in manifest.verify_manifest(path, tmp_path)] == [
+        "skipped",
+        "skipped",
+    ]
+
+
+def test_a_row_without_a_state_is_still_missing(tmp_path):
+    """Schema 1/2 rows predate states; absence must not become "skipped"."""
+    path = tmp_path / "m.json"
+    path.write_text(json.dumps({"schema": 2, "files": [{"name": "gone.csv"}]}), "utf-8")
+    assert manifest.verify_manifest(path, tmp_path)[0]["status"] == "missing"
+
+
+def test_an_unknown_state_is_verified_normally(tmp_path):
+    """A future state must hash, not skip: skipping is the exception."""
+    (tmp_path / "a.csv").write_bytes(b"a")
+    import hashlib
+
+    path = tmp_path / "m.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": 3,
+                "files": [
+                    {
+                        "name": "a.csv",
+                        "state": "carried-over",
+                        "sha256": hashlib.sha256(b"a").hexdigest(),
+                    }
+                ],
+            }
+        ),
+        "utf-8",
+    )
+    assert manifest.verify_manifest(path, tmp_path)[0]["status"] == "ok"
+
+
+def test_schema_2_is_still_readable(tmp_path):
+    (tmp_path / "a.csv").write_bytes(b"a")
+    import hashlib
+
+    path = tmp_path / "m.json"
+    path.write_text(
+        json.dumps(
+            {"schema": 2, "files": [{"name": "a.csv", "sha256": hashlib.sha256(b"a").hexdigest()}]}
+        ),
+        "utf-8",
+    )
+    assert manifest.load(path)["schema"] == 2
+    assert manifest.verify_manifest(path, tmp_path)[0]["status"] == "ok"
