@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import email.utils
+import hashlib
 import io
 import urllib.error
 from datetime import datetime, timedelta, timezone
@@ -209,3 +211,46 @@ def test_retry_after_zero_still_leaves_a_gap(monkeypatch):
         assert resp.read() == b"ok"
     assert len(slept) == 2
     assert min(slept) >= 0.05
+
+
+# -- checksum headers: case-insensitive, hex or base64 --------------------
+
+MD5_HEX = hashlib.md5(b"x").hexdigest()
+MD5_B64 = base64.b64encode(hashlib.md5(b"x").digest()).decode()
+SHA_HEX = hashlib.sha256(b"x").hexdigest()
+SHA_B64 = base64.b64encode(hashlib.sha256(b"x").digest()).decode()
+
+
+def test_a_header_is_found_whatever_its_case():
+    assert client_mod.header_value({"content-length": "5"}, "Content-Length") == "5"
+    assert client_mod.header_value({"CONTENT-LENGTH": "5"}, "content-length") == "5"
+    assert client_mod.header_value({}, "Content-Length") is None
+
+
+def test_content_md5_is_decoded_from_base64():
+    assert client_mod.checksum_of({"content-md5": MD5_B64}) == f"md5:{MD5_HEX}"
+
+
+def test_hex_is_accepted_where_a_cdn_sends_it():
+    assert client_mod.checksum_of({"x-checksum-sha256": SHA_HEX}) == f"sha256:{SHA_HEX}"
+
+
+def test_amz_checksum_is_decoded_from_base64():
+    assert client_mod.checksum_of({"X-Amz-Checksum-Sha256": SHA_B64}) == f"sha256:{SHA_HEX}"
+
+
+def test_sha256_wins_over_md5():
+    headers = {"Content-MD5": MD5_B64, "X-Amz-Checksum-Sha256": SHA_B64}
+    assert client_mod.checksum_of(headers) == f"sha256:{SHA_HEX}"
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["not base64!", "AAAA", base64.b64encode(b"short").decode(), ""],
+)
+def test_unusable_values_are_ignored(value):
+    assert client_mod.checksum_of({"Content-MD5": value}) is None
+
+
+def test_no_checksum_header_is_none():
+    assert client_mod.checksum_of({"Content-Length": "3"}) is None

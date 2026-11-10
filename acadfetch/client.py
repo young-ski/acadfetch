@@ -7,7 +7,10 @@ adapters. Only idempotent methods are retried.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import email.utils
+import hashlib
 import json
 import random
 import time
@@ -254,13 +257,53 @@ def _snippet(exc: urllib.error.HTTPError) -> str:
     return text[:SNIPPET]
 
 
-def checksum_of(headers: Mapping[str, str]) -> str | None:
-    """Prefer a strong hash header over nothing (for direct URLs)."""
-    for key in ("X-Checksum-Sha256", "X-Amz-Meta-Sha256", "Content-MD5"):
-        if key in headers:
-            algo = "sha256" if "sha256" in key.lower() else "md5"
-            return f"{algo}:{headers[key]}"
+def header_value(headers: Mapping[str, str], name: str) -> str | None:
+    """Case-insensitive header lookup; HTTP names are not case sensitive."""
+    wanted = name.lower()
+    for key, value in headers.items():
+        if key.lower() == wanted:
+            return value
     return None
 
 
-__all__ = ["Client", "parse_retry_after", "checksum_of", "verify"]
+def _as_hex(value: str | None, algo: str) -> str | None:
+    """Accept a header checksum as hex or as base64, return ``algo:hex``.
+
+    ``Content-MD5`` and ``x-amz-checksum-sha256`` are base64 by standard, while
+    some CDNs put bare hex in ``X-Checksum-Sha256``. A wrong guess here means a
+    false MISMATCH, so both forms are tried and anything else is ignored.
+    """
+    if not value:
+        return None
+    text = value.strip()
+    parsed = verify.parse(f"{algo}:{text}")
+    if parsed is not None:
+        return f"{parsed[0]}:{parsed[1]}"
+    try:
+        raw = base64.b64decode(text, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if len(raw) != hashlib.new(algo).digest_size:
+        return None
+    return f"{algo}:{raw.hex()}"
+
+
+def checksum_of(headers: Mapping[str, str]) -> str | None:
+    """The strongest checksum a response header carries, if any.
+
+    Prefer SHA-256 over MD5. For a direct URL the server is the only party
+    that can vouch for the bytes, so a strong one is worth waiting for.
+    """
+    for name, algo in (
+        ("X-Checksum-Sha256", "sha256"),
+        ("X-Amz-Meta-Sha256", "sha256"),
+        ("X-Amz-Checksum-Sha256", "sha256"),
+        ("Content-MD5", "md5"),
+    ):
+        found = _as_hex(header_value(headers, name), algo)
+        if found:
+            return found
+    return None
+
+
+__all__ = ["Client", "parse_retry_after", "checksum_of", "header_value", "verify"]

@@ -37,6 +37,14 @@ pre-1.0: a minor bump may break a flag.
 
 ### Fixed
 
+- Checksum headers on a direct URL were effectively dead code: the lookup was
+  case-sensitive, and `Content-MD5` (base64 by standard) was fed to a hex
+  parser, so a published header never became a verification. Lookups are
+  case-insensitive now, `Content-MD5` and `x-amz-checksum-sha256` are
+  base64-decoded, a bare hex `X-Checksum-Sha256` is still accepted, SHA-256
+  beats MD5, and `Content-Length` is read the same way. A header-supplied
+  checksum is recorded as `checksum_source: "header"`.
+
 - A body served as `text/html` for a `.pdf`/`.zip`/`.csv`/… was written out and
   reported `downloaded`, so a WAF block page or a login redirect became a file
   that the *next* run skipped as already present. Those bodies are refused now,

@@ -6,7 +6,7 @@ import contextlib
 import re
 from urllib.parse import unquote, urlsplit
 
-from ..client import Client, checksum_of
+from ..client import Client, checksum_of, header_value
 from ..errors import TargetError
 from .base import File, Record
 
@@ -20,11 +20,10 @@ def match(target: str) -> str | None:
 
 
 def filename_from(url: str, headers: dict | None = None) -> str:
-    if headers:
-        raw = headers.get("Content-Disposition") or ""
-        hit = _DISPOSITION.search(raw)
-        if hit:
-            return unquote(hit.group(1) or hit.group(2) or "").strip()
+    raw = header_value(headers or {}, "Content-Disposition") or ""
+    hit = _DISPOSITION.search(raw)
+    if hit:
+        return unquote(hit.group(1) or hit.group(2) or "").strip()
     path = urlsplit(url).path
     return unquote(path.rsplit("/", 1)[-1]) or "download"
 
@@ -34,8 +33,11 @@ def resolve(client: Client, target: str) -> Record:
         raise TargetError(f"not a URL: {target}")
     headers = client.head(target)
     size = None
-    with contextlib.suppress(KeyError, TypeError, ValueError):
-        size = int(headers["Content-Length"])
+    raw = header_value(headers, "Content-Length")
+    if raw is not None:
+        with contextlib.suppress(ValueError):
+            size = int(raw.strip())
+    checksum = checksum_of(headers)
     return Record(
         source="direct",
         target=target,
@@ -44,7 +46,9 @@ def resolve(client: Client, target: str) -> Record:
                 url=target,
                 name=filename_from(target, headers),
                 size=size,
-                checksum=checksum_of(headers),
+                checksum=checksum,
+                # Say who vouched: a header, not the user and not a manifest.
+                checksum_source="header" if checksum else None,
             )
         ],
         title=filename_from(target, headers),
