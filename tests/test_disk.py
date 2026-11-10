@@ -7,7 +7,7 @@ import pytest
 
 from acadfetch import downloader
 from acadfetch.client import Client
-from acadfetch.errors import HttpError
+from acadfetch.errors import LocalError
 from acadfetch.sources.base import File, Record
 
 
@@ -28,10 +28,9 @@ def _usage(free: int):
 def test_a_run_that_cannot_fit_is_refused_before_any_request(record, server, tmp_path, monkeypatch):
     monkeypatch.setattr(downloader.shutil, "disk_usage", lambda _p: _usage(1_000))
 
-    with pytest.raises(HttpError) as caught:
+    with pytest.raises(LocalError) as caught:
         downloader.fetch_record(record, downloader.Options(out=tmp_path), Client(retries=0))
 
-    assert caught.value.reason == "disk"
     assert "free" in str(caught.value)
     assert server.cfg["hits"] == {}, "refused before spending a request"
     assert not (tmp_path / "big.bin.part").exists()
@@ -40,7 +39,7 @@ def test_a_run_that_cannot_fit_is_refused_before_any_request(record, server, tmp
 def test_the_margin_is_kept_spare(record, server, tmp_path, monkeypatch):
     # Exactly enough, with no room for the manifest: still refused.
     monkeypatch.setattr(downloader.shutil, "disk_usage", lambda _p: _usage(2_000))
-    with pytest.raises(HttpError):
+    with pytest.raises(LocalError):
         downloader.fetch_record(record, downloader.Options(out=tmp_path), Client(retries=0))
 
     monkeypatch.setattr(

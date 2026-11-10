@@ -37,6 +37,20 @@ pre-1.0: a minor bump may break a flag.
 
 ### Fixed
 
+- One unexpected worker exception (a directory sitting on a final name, a
+  permission error on rename) ended the whole batch, printed a traceback and
+  lost the manifest for the files that had finished. Each future is caught now
+  and becomes one `failed` row; the rest of the batch and its manifest survive.
+- A truncated metadata response escaped as a traceback too: `IncompleteRead` is
+  an `HTTPException`, which the API path never caught. The body read is inside
+  the retry loop now, so a cut body is retried, and a permanent one is one line.
+- `-o` pointing at an existing file failed as a raw `FileExistsError`. It says
+  `-o must be a directory` before anything is fetched.
+- A dry run with too little space failed although nothing was being written; it
+  now reports the shortfall with `disk.ok: false` and exits 0.
+- `--max-size` read as `HTTP 0 for …`; a local refusal says `refused locally`
+  without inventing a status code.
+
 - arXiv legacy ids were cut at the first `v`, so `solv-int/9701001v2` became
   `sol` — a DOI that does not exist (`10.48550/arXiv.sol`), a file called
   `sol.pdf`, a version of `-int/9701001v2`, and one directory shared by every

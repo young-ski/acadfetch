@@ -310,7 +310,8 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         if args.max_size:
             check_total(replace(record, files=chosen), args.max_size)
         try:
-            free, needed = check_disk(chosen, out_dir)
+            # A plan reports the shortfall; it is not yet a failure.
+            free, needed = check_disk(chosen, out_dir, strict=False)
         except OSError:  # a filesystem that will not say; not worth failing for
             free = needed = 0
         disk = {"free": free, "needed": needed, "ok": not needed or free >= needed}
@@ -653,6 +654,11 @@ def main(argv: list[str] | None = None) -> int:
     except AcFError as exc:  # TargetError is one
         # An error sentence carries the URL, and that URL may carry a signature.
         message = _hide_text(str(exc), args)
+        print(f"acadfetch: {message}", file=sys.stderr)
+        _emit_error(args, message)
+        return EXIT_FAIL
+    except OSError as exc:  # a filesystem surprise, not a bug report
+        message = f"{exc.strerror or exc}" if exc.filename else str(exc)
         print(f"acadfetch: {message}", file=sys.stderr)
         _emit_error(args, message)
         return EXIT_FAIL
