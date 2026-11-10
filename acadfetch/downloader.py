@@ -20,7 +20,7 @@ import shutil
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from http.client import HTTPException
 from pathlib import Path
@@ -95,6 +95,13 @@ class Options:
     interrupted: bool = False
     #: Flush each finished ``.part`` to the platter before it is renamed.
     fsync: bool = True
+    #: Re-download even when a matching file is already there.
+    force: bool = False
+    #: ``-o`` was given, so the directory is the user's choice, not a guess.
+    explicit_out: bool = False
+    #: name -> url recorded by an earlier manifest in ``out``, filled by
+    #: :func:`fetch_record`. Without a checksum it is what ties a file to a URL.
+    trusted: dict[str, str] = field(default_factory=dict)
 
 
 # Live responses, so an interrupt can abort a read that is blocked on a socket
@@ -354,6 +361,22 @@ def _existing(path: Path) -> Path:
     return path
 
 
+def _trusted_urls(manifest_path: Path) -> dict[str, str]:
+    """name -> url pairs an earlier manifest in the same directory recorded."""
+    try:
+        data = json.loads(manifest_path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    rows = data.get("files") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        return {}
+    return {
+        row["name"]: row.get("url")
+        for row in rows
+        if isinstance(row, dict) and isinstance(row.get("name"), str)
+    }
+
+
 def check_disk(files, out: Path, *, margin: int = DISK_MARGIN) -> tuple[int, int]:  # noqa: ANN001
     """Refuse a run that cannot fit, before it spends a night on 97% of it.
 
@@ -386,24 +409,41 @@ def check_disk(files, out: Path, *, margin: int = DISK_MARGIN) -> tuple[int, int
     return (free, needed)
 
 
+def _already_there(final: Path, name: str, file: File, opts: Options) -> bool | None:
+    """Whether an existing file may stand in for this one.
+
+    A checksum match is proof. Without a checksum, a size match only means the
+    bytes *could* be the same, so one more thing must tie the file to this URL:
+    an explicit ``-o`` (the user chose the directory), a manifest in it that
+    recorded the same URL, or nothing else at all.
+    """
+    if opts.force or not final.exists():
+        return None
+    verdict = verify.matches(final, file.checksum)
+    if verdict is not None:
+        return verdict
+    if file.size is not None and final.stat().st_size != file.size:
+        return False
+    if opts.explicit_out:
+        return True
+    return opts.trusted.get(name) == file.url
+
+
 def fetch_file(client: Client, file: File, opts: Options, taken: set[str]) -> Result:
     name = naming.unique(naming.sanitize(file.name), taken)
     final = opts.out / name
     part = opts.out / (name + ".part")
     meta_path = opts.out / (name + META_SUFFIX)
 
-    if final.exists():
-        verdict = verify.matches(final, file.checksum)
-        sized_ok = file.size is None or final.stat().st_size == file.size
-        if verdict is True or (verdict is None and sized_ok):
-            return Result(
-                file=file,
-                state="skipped",
-                path=str(final),
-                bytes=final.stat().st_size,
-                verified=verdict,
-                name=name,
-            )
+    if _already_there(final, name, file, opts):
+        return Result(
+            file=file,
+            state="skipped",
+            path=str(final),
+            bytes=final.stat().st_size,
+            verified=verify.matches(final, file.checksum),
+            name=name,
+        )
 
     if opts.dry_run:
         return Result(file=file, state="skipped", path=str(final), verified=None, name=name)
@@ -585,6 +625,7 @@ def _fetch_record(
         check_total(record, opts.max_bytes)
     if not opts.dry_run:
         check_disk(files, opts.out)
+        opts.trusted = _trusted_urls(opts.out / "manifest.json")
 
     taken: set[str] = set()
     lock = threading.Lock()

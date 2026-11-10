@@ -7,6 +7,7 @@ target was unusable, 2 partial success, 130 interrupted (partials are kept).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -297,6 +298,8 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         max_bytes=args.max_size,
         progress=progress,
         fsync=not args.no_fsync,
+        force=args.force,
+        explicit_out=bool(args.out),
     )
 
     if args.dry_run:
@@ -474,12 +477,19 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 
 def _slug(record) -> str:  # noqa: ANN001
+    """A directory name that identifies the target, not only its filename.
+
+    ``data.csv`` from two hosts is two different datasets; the host and a short
+    hash of the full URL keep them apart. A DOI is already unique.
+    """
     if record.doi:
         return naming.sanitize(record.doi.replace("/", "_"))
-    # The path only: a presigned query is long and belongs in the manifest,
-    # not in a directory name.
-    path = urlsplit(record.target).path or record.target
-    return naming.sanitize(path.rsplit("/", 1)[-1] or "record")
+    parts = urlsplit(record.target)
+    path = parts.path or record.target
+    name = naming.sanitize(path.rsplit("/", 1)[-1] or "record")
+    host = naming.sanitize(parts.hostname or "host")
+    digest = hashlib.sha256(record.target.encode("utf-8", "replace")).hexdigest()[:8]
+    return f"{host}-{digest}-{name}"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -558,6 +568,11 @@ def build_parser() -> argparse.ArgumentParser:
     fetch.add_argument("--manifest-out", help="also write the manifest here")
     fetch.add_argument("-n", "--dry-run", action="store_true", help="list what would be fetched")
     fetch.add_argument("-q", "--quiet", action="store_true", help="no progress line")
+    fetch.add_argument(
+        "--force",
+        action="store_true",
+        help="fetch again even when a matching file is already there",
+    )
     fetch.add_argument(
         "--no-fsync",
         action="store_true",

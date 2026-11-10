@@ -37,6 +37,19 @@ pre-1.0: a minor bump may break a flag.
 
 ### Fixed
 
+- A DOI that resolved to a web page (Mendeley, Dryad, an institutional
+  repository's front door) was handed to the direct adapter, and the HTML was
+  written out as the dataset — `state: "downloaded"`, a SHA-256 over the markup,
+  and a green `verify`. A resolved URL that no adapter claims is now probed once,
+  and an HTML answer is refused with the page named.
+- The default output directory was the URL's last segment only, so
+  `data.csv` from two hosts shared a directory and the second was skipped as
+  already present. The name now carries the host and a short URL hash.
+- "Already there" meant "same size" when no checksum was published, so a
+  different file of the same length was silently kept. Without a checksum, the
+  size now needs one more tie: an explicit `-o`, or a manifest in that directory
+  that recorded the same URL. `--force` re-fetches regardless.
+
 - Checksum headers on a direct URL were effectively dead code: the lookup was
   case-sensitive, and `Content-MD5` (base64 by standard) was fed to a hex
   parser, so a published header never became a verification. Lookups are
