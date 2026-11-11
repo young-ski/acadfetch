@@ -6,19 +6,23 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-11
+
 ### Added
 
 - `--cite` and `CITATION.cff`: how to cite the tool, separate from how to cite
   the data it fetched.
 - `docs/demo.md` (a real 30-second transcript) and `docs/integrations.md`
   (aria2, Make, CI, Snakemake).
-
-### Added
-
 - `--glob PATTERN…` selects files by shell pattern and combines with `--only`.
 - `-w/--urls PATH` writes an aria2-compatible list (URL, `out=`, `dir=`) instead
   of downloading; `-` is stdout and the header moves to stderr, so it can be
   piped. Nothing is fetched and no manifest is written.
+
+### CI
+
+- mypy runs on one cell; seven errors it found were fixed and `direct.py`
+  reached 100% coverage. `Typing :: Typed` now costs something to keep.
 
 ## [0.5.0] - 2026-11-11
 
@@ -40,11 +44,6 @@ pre-1.0: a minor bump may break a flag.
 ## [0.3.1] - 2026-11-11
 
 ### CI
-
-- `mypy` runs on one cell. The package advertises `Typing :: Typed` and ships
-  `py.typed`, but nothing checked the annotations; seven errors were fixed (a
-  `-> object` return, an unchecked `Optional`, an `argparse.error` override) and
-  `direct.py` gained the last line for 100% coverage.
 
 - A `workflow_dispatch` run at a branch used to publish: the guard only runs on
   tags and `publish` accepted a skipped guard, so an untagged version could
