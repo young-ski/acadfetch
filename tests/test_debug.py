@@ -108,3 +108,13 @@ def test_debug_does_not_change_the_json_document(server, monkeypatch, capsys, tm
 
     assert code == cli.EXIT_OK
     assert json.loads(out)["summary"]["ok"] is True
+
+
+def test_a_traceback_does_not_leak_a_credential(capsys):
+    assert (
+        cli.main(["fetch", "https://example.invalid/x?X-Amz-Signature=SECRET", "--verbose", "-n"])
+        == 1
+    )
+    err = capsys.readouterr().err
+    assert "Traceback (most recent call last)" in err
+    assert "SECRET" not in err

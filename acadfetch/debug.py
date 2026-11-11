@@ -14,6 +14,8 @@ import sys
 import traceback
 from collections.abc import Mapping
 
+from . import urls
+
 _ON = False
 _CREDENTIAL_HEADERS = frozenset(
     {"authorization", "cookie", "proxy-authorization", "x-api-key", "x-auth-token"}
@@ -43,11 +45,10 @@ def log(message: str) -> None:
 def log_exception(exc: BaseException) -> None:
     if not _ON:
         return
-    try:
-        traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
+    with contextlib.suppress(OSError, ValueError):
+        text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        sys.stderr.write(urls.redact_text(text))
         sys.stderr.flush()
-    except (OSError, ValueError):
-        pass
 
 
 def headers_for_log(headers: Mapping[str, str]) -> str:
