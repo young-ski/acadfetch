@@ -13,6 +13,7 @@ from urllib.parse import quote, urlsplit
 
 from ..client import Client
 from ..errors import HttpError, SourceError, TargetError
+from .base import Record
 
 HANDLE = "https://doi.org/api/handles/{doi}"
 _DOI = re.compile(r"^10\.\d{4,9}/\S+$")
@@ -52,7 +53,7 @@ def _page_like(client: Client, url: str, content_type: str) -> bool:
     return head.lstrip()[:1] == b"<"
 
 
-def resolve(client: Client, target: str) -> object:
+def resolve(client: Client, target: str) -> Record:
     url = resolve_url(client, target)
     from . import registry  # late import: registry imports this module
 

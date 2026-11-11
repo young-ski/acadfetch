@@ -24,6 +24,7 @@ Move the `[Unreleased]` entries under `## [x.y.z] - YYYY-MM-DD`. Leave an empty
 
 ```bash
 ruff check . && ruff format --check .
+python -m mypy
 pytest -q --cov=acadfetch --cov-fail-under=85
 python -X dev -W error -m pytest -q
 python -m build && python -m twine check dist/*

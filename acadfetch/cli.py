@@ -15,6 +15,7 @@ import time
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NoReturn
 from urllib.parse import urlsplit
 
 from . import auth, consts, debug, manifest, naming, urls, verify
@@ -590,7 +591,7 @@ def _slug(record) -> str:  # noqa: ANN001
 class Parser(argparse.ArgumentParser):
     """Usage errors are not "partial": exit 64 keeps 2 meaning a partial run."""
 
-    def error(self, message: str) -> None:  # noqa: D102
+    def error(self, message: str) -> NoReturn:  # noqa: D102
         self.print_usage(sys.stderr)
         self.exit(EXIT_USAGE, f"{self.prog}: error: {message}\n")
 

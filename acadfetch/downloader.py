@@ -17,6 +17,7 @@ import json
 import os
 import random
 import shutil
+import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -24,6 +25,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from http.client import HTTPException
 from pathlib import Path
+from typing import cast
 
 from . import atomic, debug, naming, verify
 from .client import Client
@@ -172,10 +174,10 @@ def _range_start(value: str | None) -> int | None:
         return None
 
 
-def _socket_of(resp) -> object | None:  # noqa: ANN001
+def _socket_of(resp) -> socket.socket | None:  # noqa: ANN001
     """The socket under a urllib response, if we can reach it."""
     raw = getattr(getattr(resp, "fp", None), "raw", None)
-    return getattr(raw, "_sock", None)
+    return cast("socket.socket | None", getattr(raw, "_sock", None))
 
 
 def _is_error_page(content_type: str, name: str) -> bool:
@@ -200,7 +202,7 @@ def _clear_timeout_latch(resp) -> None:  # noqa: ANN001
     behaviour instead of breaking the run.
     """
     stream = getattr(getattr(resp, "fp", None), "raw", None)
-    if getattr(stream, "_timeout_occurred", False):
+    if stream is not None and getattr(stream, "_timeout_occurred", False):
         stream._timeout_occurred = False
 
 
@@ -371,7 +373,7 @@ def _trusted_urls(manifest_path: Path) -> dict[str, str]:
     if not isinstance(rows, list):
         return {}
     return {
-        row["name"]: row.get("url")
+        row["name"]: str(row.get("url") or "")
         for row in rows
         if isinstance(row, dict) and isinstance(row.get("name"), str)
     }
@@ -541,6 +543,7 @@ def _attempt(
             time.sleep(min(2**attempt, 10) * (0.7 + random.random() * 0.6))
             resumed_from = part.stat().st_size if part.exists() else 0
     else:
+        assert last is not None  # the loop only ends after a failure
         return Result(
             file=file,
             state="failed",
