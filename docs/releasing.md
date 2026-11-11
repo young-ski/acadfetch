@@ -31,6 +31,14 @@ python -m build && python -m twine check dist/*
 
 ## 5. Tag on main, and push the tag alone
 
+`workflow_dispatch` also works, but only at a tag:
+`gh workflow run release.yml --ref v0.1.2`. Dispatched at a branch it runs the
+gates and stops, because the tag guard has nothing to check.
+
+Actions in the workflows are pinned to commit SHAs with a `# vX.Y.Z` comment.
+Dependabot bumps them; if you bump one by hand, resolve the tag to its commit
+(`git ls-remote <repo> refs/tags/<tag>`) and keep the comment.
+
 ```bash
 git switch main && git pull
 git tag -a v0.1.2 -m "0.1.2"

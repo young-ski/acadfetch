@@ -1,7 +1,8 @@
 version: 2
 
-# Nothing is pinned to a SHA yet, so the next break will come from the toolchain
-# rather than from the code. This is where it gets noticed.
+# Every action is pinned to a commit SHA, the publish and attestation chain
+# included. Dependabot rewrites the SHA and leaves the `# vX.Y.Z` comment
+# behind, so a bump is still readable.
 updates:
   - package-ecosystem: pip
     directory: /
