@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import fnmatch
+import hashlib
 import json
 import os
 import random
@@ -83,6 +84,9 @@ class Transfer:
     etag: str | None = None
     http_status: int | None = None
     retrieved_at: str | None = None
+    #: Algorithm -> hex digest, computed while the bytes went by. ``None`` when
+    #: no body was read (a 416 on a complete part).
+    digests: dict[str, str] | None = None
 
 
 @dataclass
@@ -294,6 +298,19 @@ def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Opt
             mode, offset = "wb", 0
         else:
             mode, offset = "ab", have
+
+        # Hash while the bytes go by instead of reading the finished file again.
+        # A resumed transfer has to be fed what is already on disk first.
+        parsed = verify.parse(file.checksum)
+        wanted_algo = parsed[0] if parsed else None
+        hashers = {"sha256": hashlib.sha256()}
+        if wanted_algo and wanted_algo != "sha256":
+            hashers[wanted_algo] = hashlib.new(wanted_algo)
+        if mode == "ab":
+            with part.open("rb") as existing:
+                for old in iter(lambda: existing.read(1 << 20), b""):
+                    for hasher in hashers.values():
+                        hasher.update(old)
         _write_meta(
             meta_path,
             {
@@ -323,6 +340,8 @@ def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Opt
             with part.open(mode) as fh:
                 for chunk in _chunks(resp, client.timeout, file.url):
                     fh.write(chunk)
+                    for hasher in hashers.values():
+                        hasher.update(chunk)
                     written += len(chunk)
                     if opts.progress:
                         opts.progress.advance(len(chunk))
@@ -350,6 +369,7 @@ def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Opt
             etag=resp.headers.get("ETag"),
             http_status=status,
             retrieved_at=_now(),
+            digests={algo: digest.hexdigest() for algo, digest in hashers.items()},
         )
 
 
@@ -427,24 +447,38 @@ def _reserved(files) -> set[str]:  # noqa: ANN001
     return reserved
 
 
-def _already_there(final: Path, name: str, file: File, opts: Options) -> bool | None:
-    """Whether an existing file may stand in for this one.
+def _verdict(file: File, digests: dict[str, str] | None) -> bool | None:
+    parsed = verify.parse(file.checksum)
+    if parsed is None:
+        return None
+    if not digests:
+        return None
+    return digests.get(parsed[0]) == parsed[1]
+
+
+def _already_there(
+    final: Path, name: str, file: File, opts: Options
+) -> tuple[bool, dict[str, str] | None]:
+    """Whether an existing file may stand in for this one, and its digests.
 
     A checksum match is proof. Without a checksum, a size match only means the
     bytes *could* be the same, so one more thing must tie the file to this URL:
-    an explicit ``-o`` (the user chose the directory), a manifest in it that
-    recorded the same URL, or nothing else at all.
+    an explicit ``-o`` (the user chose the directory) or a manifest in it that
+    recorded the same URL. Both hashes are computed in that one read, so the
+    manifest does not have to read the file again.
     """
     if opts.force or not final.exists():
-        return None
-    verdict = verify.matches(final, file.checksum)
-    if verdict is not None:
-        return verdict
+        return False, None
+    parsed = verify.parse(file.checksum)
+    algos = {"sha256"} | ({parsed[0]} if parsed else set())
+    digests = verify.hashes(final, algos)
+    if parsed is not None:
+        return digests[parsed[0]] == parsed[1], digests
     if file.size is not None and final.stat().st_size != file.size:
-        return False
+        return False, digests
     if opts.explicit_out:
-        return True
-    return opts.trusted.get(name) == file.url
+        return True, digests
+    return opts.trusted.get(name) == file.url, digests
 
 
 def fetch_file(client: Client, file: File, opts: Options, taken: set[str]) -> Result:
@@ -453,14 +487,16 @@ def fetch_file(client: Client, file: File, opts: Options, taken: set[str]) -> Re
     part = opts.out / (name + ".part")
     meta_path = opts.out / (name + META_SUFFIX)
 
-    if _already_there(final, name, file, opts):
+    trusted, digests = _already_there(final, name, file, opts)
+    if trusted:
         return Result(
             file=file,
             state="skipped",
             path=str(final),
             bytes=final.stat().st_size,
-            verified=verify.matches(final, file.checksum),
+            verified=_verdict(file, digests),
             name=name,
+            sha256=(digests or {}).get("sha256"),
         )
 
     if opts.dry_run:
@@ -574,12 +610,12 @@ def _attempt(
             retrieved_at=_now(),
         )
 
-    verdict = verify.matches(part, file.checksum)
+    verdict = _verdict(file, info.digests if info else None)
     if verdict is False:
         _drop(part, meta_path)
         try:
             info = _transfer(client, file, part, meta_path, opts)
-            verdict = verify.matches(part, file.checksum)
+            verdict = _verdict(file, info.digests if info else None)
         except Exception as exc:  # noqa: BLE001
             return Result(
                 file=file,
@@ -603,6 +639,7 @@ def _attempt(
         bytes=final.stat().st_size,
         verified=verdict,
         resumed_from=resumed_from,
+        sha256=(info.digests or {}).get("sha256") if info else None,
         final_url=info.final_url if info else None,
         etag=info.etag if info else None,
         http_status=info.http_status if info else None,
@@ -685,17 +722,31 @@ def _fetch_record(
         return _in_record_order(results, record)
 
     pool = ThreadPoolExecutor(max_workers=opts.concurrency)
+    # Keep the in-flight set bounded: a 5000-file record submitted in one go
+    # holds 5000 futures and progress keys at once.
+    window = max(opts.concurrency * 2, 1)
+    queue = iter(files)
     futures = {}
+
+    def submit(file: File) -> None:  # noqa: ANN001
+        with lock:
+            futures[pool.submit(fetch_file, client, file, opts, taken)] = file
+
     try:
-        for file in files:
-            with lock:
-                futures[pool.submit(fetch_file, client, file, opts, taken)] = file
-        for future in as_completed(futures):
-            file = futures[future]
-            try:
-                results.append(future.result())
-            except Exception as exc:  # noqa: BLE001 - one worker must not end the batch
-                results.append(_crashed(file, exc))
+        for file in queue:
+            submit(file)
+            if len(futures) >= window:
+                break
+        while futures:
+            for future in as_completed(list(futures)):
+                file = futures.pop(future)
+                try:
+                    results.append(future.result())
+                except Exception as exc:  # noqa: BLE001 - one worker must not end the batch
+                    results.append(_crashed(file, exc))
+                nxt = next(queue, None)
+                if nxt is not None:
+                    submit(nxt)
     except KeyboardInterrupt:
         # Abort the reads that are blocked, then let the workers unwind: they
         # see the stop flag and keep their .part instead of retrying.
