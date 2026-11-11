@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import auth, consts, manifest, naming, urls, verify
+from . import auth, consts, debug, manifest, naming, urls, verify
 from . import remote as remote_check
 from .client import Client
 from .downloader import Options, check_disk, check_total, fetch_record, human
@@ -633,6 +633,11 @@ def build_parser() -> argparse.ArgumentParser:
             help="extra request header, repeatable (e.g. 'Authorization: Bearer <token>')",
         )
         p.add_argument(
+            "--verbose",
+            action="store_true",
+            help="trace requests and retries to stderr, with tracebacks (also ACADFETCH_DEBUG=1)",
+        )
+        p.add_argument(
             "--timeout",
             type=_timeout,
             default=consts.DEFAULT_TIMEOUT,
@@ -788,6 +793,7 @@ def main(argv: list[str] | None = None) -> int:
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
     args = build_parser().parse_args(argv)
+    debug.configure(getattr(args, "verbose", False))
     _recover_target(args)
     if getattr(args, "command", "") == "fetch" and getattr(args, "target", None) is None:
         message = (
@@ -802,12 +808,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.func(args)
     except AcFError as exc:  # TargetError is one
+        debug.log_exception(exc)
         # An error sentence carries the URL, and that URL may carry a signature.
         message = _hide_text(str(exc), args)
         print(f"acadfetch: {message}", file=sys.stderr)
         _emit_error(args, message)
         return EXIT_FAIL
     except OSError as exc:  # a filesystem surprise, not a bug report
+        debug.log_exception(exc)
         message = f"{exc.strerror or exc}" if exc.filename else str(exc)
         print(f"acadfetch: {message}", file=sys.stderr)
         _emit_error(args, message)

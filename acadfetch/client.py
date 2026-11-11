@@ -23,7 +23,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from http.client import HTTPException
 
-from . import consts, verify
+from . import consts, debug, urls, verify
 from .errors import HttpError
 from .ratelimit import TokenBucket
 
@@ -176,10 +176,11 @@ class Client:
         if retry_after is not None:
             # A literal `Retry-After: 0` would mean no gap at all and a burst;
             # keep a small jittered floor under it.
-            time.sleep(max(retry_after, 0.05 + random.random() * 0.15))
-            return
-        backoff = min(0.8 * (2**attempt), 30.0)
-        time.sleep(backoff * (0.7 + random.random() * 0.6))
+            delay = max(retry_after, 0.05 + random.random() * 0.15)
+        else:
+            delay = min(0.8 * (2**attempt), 30.0) * (0.7 + random.random() * 0.6)
+        debug.log(f"retry in {delay:.2f}s")
+        time.sleep(delay)
 
     def _request(
         self, url: str, headers: Mapping[str, str] | None = None
@@ -204,6 +205,7 @@ class Client:
         headers=None,
         block_retries: int | None = None,
         attempts: int | None = None,
+        method: str = "GET",
     ):  # noqa: ANN001, ANN202
         if block_retries is None:
             block_retries = self.block_retries
@@ -215,11 +217,16 @@ class Client:
         for attempt in range(budget):
             self.bucket.acquire()
             retry_after = None
+            req = self._request(url, headers)
+            debug.log(f"{method} {urls.redact(url)} headers[{debug.headers_for_log(req.headers)}]")
             try:
-                return fn(self._request(url, headers))
+                resp = fn(req)
+                debug.log(f"-> {getattr(resp, 'status', 'ok')}")
+                return resp
             except urllib.error.HTTPError as exc:
                 last = exc
                 last_detail = detail = _snippet(exc)
+                debug.log(f"-> {exc.code} {detail[:120]}")
                 content_type = exc.headers.get("Content-Type") if exc.headers else None
                 last_blocked = exc.code == 403 and is_block_page(detail, content_type)
                 retry_after = parse_retry_after(
@@ -239,6 +246,7 @@ class Client:
                     ) from exc
                 else:
                     waf += 1
+                    debug.log(f"-> block page, retry {waf}/{block_retries}")
             except HttpError as exc:
                 # Raised by a caller-supplied fn, e.g. a body that stopped
                 # short. Only the transient ones are worth another request.
@@ -248,6 +256,7 @@ class Client:
                 last_detail = str(exc)
                 last_blocked = False
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                debug.log(f"-> {type(exc).__name__}: {exc}")
                 last = exc
                 last_detail = str(exc)
                 last_blocked = False
@@ -298,7 +307,7 @@ class Client:
 
         try:
             # HEAD only feeds size/filename; one shot, never worth a retry.
-            with self._with_retries(url, _head, block_retries=0, attempts=1) as resp:
+            with self._with_retries(url, _head, block_retries=0, attempts=1, method="HEAD") as resp:
                 return dict(resp.headers)
         except HttpError as exc:
             if exc.status in (403, 405, 501):

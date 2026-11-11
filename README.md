@@ -253,6 +253,13 @@ acadfetch fetch zenodo:123456 --ca-bundle corp-tls.pem          # trust this PEM
 either, `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` are honoured by urllib as
 usual. A timeout is per request, connect to first byte.
 
+## Debugging
+
+`--verbose` (or `ACADFETCH_DEBUG=1`) traces each request, each retry and the
+traceback of a failure to stderr; stdout, `--json` documents and exit codes are
+unchanged. Credential header values and presigned query parameters are masked,
+so the trace can be pasted into an issue.
+
 ## Politeness
 
 Defaults: 3 parallel transfers, 2 requests/second, 4 retries with jittered
