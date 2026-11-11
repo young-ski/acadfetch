@@ -6,6 +6,13 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
+### Added
+
+- `--timeout SECONDS`, `--proxy URL`, `--no-proxy` and `--ca-bundle PATH` on every
+  network command. A campus proxy or a TLS-inspecting middlebox used to need
+  environment variables or hope; `--proxy` overrides the environment, `--no-proxy`
+  ignores it, and `--ca-bundle` trusts a PEM instead of the system store.
+
 ## [0.3.1] - 2026-11-11
 
 ### CI

@@ -29,6 +29,23 @@ If the public resolver answers and yours does not, either fix DNS
 (`%WINDIR%\System32\drivers\etc\hosts` on Windows) for the length of the job and
 remove it afterwards -- a pinned address outlives a CDN change.
 
+## A proxy, or TLS interception
+
+Environment proxies are used automatically. When the proxy is only known per
+run, pass it; when the environment's is wrong, turn it off:
+
+```bash
+acadfetch fetch … --proxy http://proxy.campus:3128
+acadfetch fetch … --no-proxy
+```
+
+Corporate TLS inspection replaces the certificate chain: point `--ca-bundle` at
+the inspecting CA's PEM, or the run fails with `CERTIFICATE_VERIFY_FAILED`.
+
+A hard idle limit is `--timeout SECONDS` (default 60). Setting it below the
+longest silence on the link makes transfers fail and keep their `.part` — a
+retry then resumes.
+
 ## `403` with an HTML body
 
 A CDN or WAF in front of the URL answered a block page. Two block-page retries

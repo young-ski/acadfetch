@@ -100,6 +100,32 @@ def _count(text: str) -> int:
     return value
 
 
+def _timeout(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number of seconds: {text!r}") from None
+    if value <= 0:
+        raise argparse.ArgumentTypeError("must be > 0 seconds")
+    return value
+
+
+def _proxy(text: str) -> str:
+    candidate = text if "://" in text else f"http://{text}"
+    parts = urlsplit(candidate)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise argparse.ArgumentTypeError(
+            f"expected http://host:port or https://host:port, got {text!r}"
+        )
+    return candidate
+
+
+def _ca_bundle(text: str) -> str:
+    if not Path(text).is_file():
+        raise argparse.ArgumentTypeError(f"no such file: {text!r}")
+    return text
+
+
 def _checksum(text: str) -> str:
     """Validate ``--checksum`` before any request is made."""
     parsed = verify.parse(text)
@@ -126,6 +152,10 @@ def _client(args: argparse.Namespace) -> Client:
         retries=args.retries,
         block_retries=args.retry_403,
         allow_http=args.allow_http,
+        timeout=args.timeout,
+        proxy={"http": args.proxy, "https": args.proxy} if args.proxy else None,
+        no_proxy=args.no_proxy,
+        ca_bundle=args.ca_bundle,
         headers=_headers(args.header),
         auth={source: token.headers for source, token in tokens.items()},
     )
@@ -601,6 +631,31 @@ def build_parser() -> argparse.ArgumentParser:
             action="append",
             metavar="NAME:VALUE",
             help="extra request header, repeatable (e.g. 'Authorization: Bearer <token>')",
+        )
+        p.add_argument(
+            "--timeout",
+            type=_timeout,
+            default=consts.DEFAULT_TIMEOUT,
+            metavar="SECONDS",
+            help="per-request timeout, connect and idle (default: %(default)s)",
+        )
+        p.add_argument(
+            "--proxy",
+            type=_proxy,
+            metavar="URL",
+            help="http:// or https:// proxy for every request; overrides the "
+            "environment and wins over --no-proxy",
+        )
+        p.add_argument(
+            "--no-proxy",
+            action="store_true",
+            help="ignore HTTP_PROXY / HTTPS_PROXY / ALL_PROXY",
+        )
+        p.add_argument(
+            "--ca-bundle",
+            type=_ca_bundle,
+            metavar="PATH",
+            help="PEM file to trust instead of the system store (corporate TLS inspection)",
         )
         p.add_argument(
             "--allow-http",
