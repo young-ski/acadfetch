@@ -79,6 +79,15 @@ pre-1.0: a minor bump may break a flag.
 
 ### Changed
 
+- The digest is computed while the bytes go by: SHA-256 and whatever the source
+  published are updated in the transfer loop, a resumed part is seeded once, and
+  the verification and the manifest reuse the result. A finished file is no
+  longer read for `verify` and again for `manifest.json`; a reused file is read
+  once for both its verdict and its hash. At 64 MiB that is two full passes
+  (128 MiB) gone per file.
+- In-flight requests are capped at `concurrency * 2` and refilled as they
+  complete, instead of submitting one future per file up front.
+
 - A usage error (a bad flag value, a missing target) exits `64` instead of `2`.
   `2` is "partial success", so a wrapper that retried on `2` used to retry a typo.
 - `--only` that matches nothing lists the file names that do exist, in the human

@@ -58,6 +58,8 @@ class Result:
     http_status: int | None = None
     #: RFC 3339 UTC, when the last byte (or the failure) arrived.
     retrieved_at: str | None = None
+    #: SHA-256 of the bytes, computed during the transfer or the reuse check.
+    sha256: str | None = None
 
     @property
     def ok(self) -> bool:

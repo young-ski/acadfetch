@@ -135,6 +135,8 @@ def _entry(  # noqa: ANN001
 def _sha256(result: Result | None) -> str | None:
     if result is None or not result.path:
         return None
+    if result.sha256:
+        return result.sha256
     path = Path(result.path)
     if not path.is_file():
         return None

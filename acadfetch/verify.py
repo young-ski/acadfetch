@@ -41,11 +41,17 @@ def _guess(candidate: str) -> str:
 
 
 def hash_file(path: Path, algo: str) -> str:
-    digest = hashlib.new(algo)
+    return hashes(path, {algo})[algo]
+
+
+def hashes(path: Path, algos: set[str]) -> dict[str, str]:
+    """Every requested digest in one pass over the file."""
+    digests = {algo: hashlib.new(algo) for algo in algos}
     with path.open("rb") as fh:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+            for digest in digests.values():
+                digest.update(chunk)
+    return {algo: digest.hexdigest() for algo, digest in digests.items()}
 
 
 def matches(path: Path, checksum: str | None) -> bool | None:
