@@ -315,3 +315,8 @@ def test_two_legacy_papers_no_longer_share_a_name():
         "arxiv:solv-int/9701002v1",
     )
     assert first.files[0].name != second.files[0].name
+
+
+def test_direct_resolve_rejects_a_non_url():
+    with pytest.raises(TargetError, match="not a URL"):
+        direct.resolve(HeadClient({}), "zenodo:1")

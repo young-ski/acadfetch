@@ -58,7 +58,7 @@ From a checkout, for development:
 
 ```bash
 git clone https://github.com/young-ski/acadfetch && cd acadfetch
-python -m pip install -e . pytest && python -m pytest -q
+python -m pip install -e . pytest mypy && python -m pytest -q
 ```
 
 ## Supported platforms

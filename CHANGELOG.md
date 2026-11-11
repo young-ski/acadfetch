@@ -27,6 +27,11 @@ pre-1.0: a minor bump may break a flag.
 
 ### CI
 
+- `mypy` runs on one cell. The package advertises `Typing :: Typed` and ships
+  `py.typed`, but nothing checked the annotations; seven errors were fixed (a
+  `-> object` return, an unchecked `Optional`, an `argparse.error` override) and
+  `direct.py` gained the last line for 100% coverage.
+
 - A `workflow_dispatch` run at a branch used to publish: the guard only runs on
   tags and `publish` accepted a skipped guard, so an untagged version could
   reach PyPI with no post-publish smoke. `publish` now requires a tag ref; a

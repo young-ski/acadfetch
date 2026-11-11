@@ -7,11 +7,12 @@ python -m venv .venv && . .venv/bin/activate   # Windows: .venv/Scripts/activate
 python -m pip install -e . pytest pytest-cov ruff
 ruff check . && pytest -q
 
-CI runs three gates; matching them locally is the point, so run all of them
+CI runs four gates; matching them locally is the point, so run all of them
 before a PR:
 
 ```bash
 ruff check . && ruff format --check .
+python -m mypy                                   # annotate, do not cast away
 pytest -q --cov=acadfetch --cov-fail-under=85    # the floor stops a gutted test
 python -X dev -W error -m pytest -q              # unraisable warnings are failures
 ```

@@ -43,12 +43,16 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           cache: pip
-      - run: python -m pip install -e . pytest pytest-cov ruff
+      - run: python -m pip install -e . pytest pytest-cov ruff mypy
       - name: Lint
         if: matrix.lint != false
         run: |
           ruff check .
           ruff format --check .
+      - name: Types
+        # One cell is enough: a type error is platform-independent.
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.15'
+        run: python -m mypy
       - name: Test
         run: pytest -q --cov=acadfetch --cov-fail-under=85
       - name: Warnings are errors where they can be
