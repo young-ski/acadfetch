@@ -18,6 +18,9 @@ restricted file fails fast instead of burning retries.
 `tests/test_client.py` and `tests/test_downloader.py` through the conftest
 server; the names keep the provenance.
 
+`ca.pem` is one public root certificate (taken from certifi) so a test can pass
+`--ca-bundle` a PEM that really loads; it is not expected to verify any host.
+
 `figshare_file.pdf` is a real 193 410-byte PDF whose md5 is
 `bbde85208529e663141a0e8cb6fa9c4a`. It is the only real-bytes fixture, so the
 verify path is proven against a published checksum rather than a synthetic

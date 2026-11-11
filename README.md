@@ -238,6 +238,21 @@ A CDN in front of a direct URL can answer 403 with a block page. Those are
 retried twice with backoff, while a 403 carrying the application's own JSON is
 terminal on the first answer; `--retry-403 N` changes the count.
 
+## Networking
+
+Proxies, timeouts and a private CA are flags, not luck:
+
+```bash
+acadfetch fetch zenodo:123456 --proxy http://proxy.campus:3128   # overrides the environment
+acadfetch fetch zenodo:123456 --no-proxy                        # ignore HTTP(S)_PROXY
+acadfetch fetch zenodo:123456 --timeout 15                      # idle/connect budget, seconds
+acadfetch fetch zenodo:123456 --ca-bundle corp-tls.pem          # trust this PEM instead of the store
+```
+
+`--proxy` takes `http://` or `https://` and wins over `--no-proxy`; without
+either, `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` are honoured by urllib as
+usual. A timeout is per request, connect to first byte.
+
 ## Politeness
 
 Defaults: 3 parallel transfers, 2 requests/second, 4 retries with jittered

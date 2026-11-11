@@ -13,6 +13,7 @@ import email.utils
 import hashlib
 import json
 import random
+import ssl
 import sys
 import time
 import urllib.error
@@ -143,6 +144,9 @@ class Client:
         auth: Mapping[str, Mapping[str, str]] | None = None,
         block_retries: int = consts.WAF_403_RETRIES,
         allow_http: bool = False,
+        proxy: Mapping[str, str] | None = None,
+        no_proxy: bool = False,
+        ca_bundle: str | None = None,
     ) -> None:
         self.bucket = TokenBucket(rate)
         self.retries = max(0, retries)
@@ -157,7 +161,15 @@ class Client:
         self.auth = {k: dict(v) for k, v in (auth or {}).items()}
         self.source: str | None = None
         self.redirects = RedirectPolicy(allow_http=allow_http)
-        self.opener = urllib.request.build_opener(self.redirects)
+        handlers: list = [self.redirects]
+        # An explicit ProxyHandler replaces urllib's environment handling; the
+        # empty dict is how --no-proxy ignores HTTP(S)_PROXY.
+        if proxy is not None or no_proxy:
+            handlers.append(urllib.request.ProxyHandler(dict(proxy or {})))
+        if ca_bundle:
+            context = ssl.create_default_context(cafile=ca_bundle)
+            handlers.append(urllib.request.HTTPSHandler(context=context))
+        self.opener = urllib.request.build_opener(*handlers)
 
     # -- internals ---------------------------------------------------------
     def _sleep(self, attempt: int, retry_after: float | None) -> None:
