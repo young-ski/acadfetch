@@ -273,3 +273,23 @@ def test_the_default_directory_drops_the_query(server, monkeypatch, capsys, tmp_
     slug = Path(json.loads(out)["out"]).name
     assert slug.startswith("direct-127.0.0.1-") and slug.endswith("-a.bin")
     assert "SECRET" not in slug
+
+
+def test_every_report_field_is_in_the_contract(served, capsys, tmp_path):
+    """A field added to the document without a line in the contract fails here."""
+    docs = Path("docs/json-report.md").read_text("utf-8")
+
+    _, out, _ = _run(capsys, "fetch", "zenodo:1", "--json", "-o", tmp_path)
+    fetch_doc = json.loads(out)
+    for key in fetch_doc:
+        assert f"`{key}`" in docs, f"fetch field {key!r} is undocumented"
+    for key in fetch_doc["files"][0]:
+        assert f"`{key}`" in docs, f"file field {key!r} is undocumented"
+
+    manifest_path = tmp_path / "manifest.json"
+    _, vout, _ = _run(capsys, "verify", manifest_path, "--json")
+    verify_doc = json.loads(vout)
+    for key in verify_doc:
+        assert f"`{key}`" in docs, f"verify field {key!r} is undocumented"
+    for value in ("escaped", "malformed", "remote_match", "remote_unavailable"):
+        assert value in docs, f"{value!r} is undocumented"

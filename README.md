@@ -112,7 +112,8 @@ acadfetch fetch zenodo:123456 --json | jq -r '.files[] | select(.state=="failed"
 ```
 
 Exit codes are unchanged, and a failure before any transfer still produces a
-document with `error` set. `report` is the document's schema version (now `2`):
+document with `error` set. `report` is the document's schema version (now `2`, field reference in
+[docs/json-report.md](docs/json-report.md)):
 fields are added, never removed or given a new meaning, and `state` may gain
 values — treat an unknown one as non-terminal. `verify --json` reports per-file
 `MISMATCH` rows the same way, and its `summary` counts `skipped` rows

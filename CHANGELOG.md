@@ -230,6 +230,10 @@ pre-1.0: a minor bump may break a flag.
 
 ### Documentation
 
+- `docs/json-report.md`: the whole `--json` contract, field by field, with the
+  stability rule (`report` versions it, fields are appended), redaction, exit
+  codes and `jq` recipes. A test keeps the field list and the document in step.
+
 - The fourth "works as typed" command was `https://example.org/dataset.tar.gz`,
   a reserved domain that answers 404; so was the direct example in `sources`.
   Both are now a real ndownloader URL, which doubles as the figshare recipe.
