@@ -226,6 +226,15 @@ def _report(args: argparse.Namespace) -> dict:
     }
 
 
+CITATION = """To cite acadfetch itself:
+
+  young-ski. acadfetch (version {version}). MIT. {url}
+
+To cite the data, cite the repository record and keep its manifest.json beside
+the analysis: the manifest is what lets anyone re-check the bytes later.
+`docs/manifest.md` explains what it does and does not prove."""
+
+
 def _hide(text: str, args: argparse.Namespace) -> str:
     """Redact credential query parameters unless --record-full-url asked for
     the original string."""
@@ -638,6 +647,11 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--version", action="version", version=f"acadfetch {consts.__version__}")
+    parser.add_argument(
+        "--cite",
+        action="store_true",
+        help="print how to cite the tool, then exit",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     def network_flags(p: argparse.ArgumentParser) -> None:
@@ -840,6 +854,14 @@ def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
+    argv_list = list(sys.argv[1:] if argv is None else argv)
+    if "--cite" in argv_list:
+        print(
+            CITATION.format(
+                version=consts.__version__, url="https://github.com/young-ski/acadfetch"
+            )
+        )
+        return EXIT_OK
     args = build_parser().parse_args(argv)
     debug.configure(getattr(args, "verbose", False))
     _recover_target(args)
