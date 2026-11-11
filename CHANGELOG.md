@@ -6,6 +6,8 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-11
+
 ### Added
 
 - `--timeout SECONDS`, `--proxy URL`, `--no-proxy` and `--ca-bundle PATH` on every
@@ -224,7 +226,6 @@ pre-1.0: a minor bump may break a flag.
   the run instead of moving to the next file.
 
 ### CI
-
 
 - A nightly job downloads and verifies three fixed public records and opens (or
   appends to) a `live-smoke` issue on failure, closing it on recovery. It is not

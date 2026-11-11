@@ -214,6 +214,8 @@ PR-6（独立）
 
 ## 6. 0.2.0 之后（压缩）
 
+**已完成**：R10 remote verify（0.3.0）、R13 nightly+E2（CI）、R14 JSON 契约（docs/json-report.md）、R15 发布卫生（tag-only、SHA pin）、R16 网络控制（0.4.0）。
+
 **6 周头部（D1 决定）**：R10 `verify --against-remote`（5 天，第一件事）→ R13 nightly smoke + 自动开 issue → R14 schema 文档补齐 → R15 发布卫生（dispatch 强制 tag、pin publish/attest、real smoke、CHANGELOG 结构、内部稿归档）→ R16 `--timeout/--proxy/--ca-bundle`。
 **6 周尾部**：R17 verbose、R09 字段补全（若 PR-2 未覆盖）。
 **3 个月**：R18 流式哈希/有界队列、R19 命名竞态（issue #5）、R20 类型门或撤 `Typed`、R12 `--urls/--glob`、W4 CITATION/软件 DOI/demo/Snakemake。
