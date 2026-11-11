@@ -6,6 +6,14 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
+### Added
+
+- `verify --against-remote`: resolve `target` again and compare each recorded
+  checksum with what the source publishes now, so a manifest that was rewritten
+  is caught even when the local hashes still agree with it. Off by default;
+  `remote_mismatch` fails, `--require-remote` also fails on an unreachable
+  source, and a successful check records `remote_checked_at`.
+
 ## [0.2.1] - 2026-11-11
 
 ### Fixed

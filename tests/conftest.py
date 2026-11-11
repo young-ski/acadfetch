@@ -26,6 +26,21 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
         self.wfile.flush()
 
+    def do_HEAD(self):  # noqa: N802
+        cfg = self.server.cfg
+        path = self.path.split("?")[0]
+        cfg["hits"][path] = cfg["hits"].get(path, 0) + 1
+        if path not in cfg["files"]:
+            self.send_error(404)
+            return
+        self.send_response(200)
+        for name, value in cfg["headers"].get(path, {}).items():
+            self.send_header(name, value)
+        self.send_header("Content-Type", cfg["types"].get(path, "application/octet-stream"))
+        self.send_header("Content-Length", str(len(cfg["files"][path])))
+        self.send_header("ETag", cfg["etag"])
+        self.end_headers()
+
     def do_GET(self):  # noqa: N802
         cfg = self.server.cfg
         path = self.path.split("?")[0]
@@ -89,6 +104,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header(
                     "Content-Range", f"bytes {start}-{len(payload) - 1}/{len(payload)}"
                 )
+        for name, value in cfg["headers"].get(path, {}).items():
+            self.send_header(name, value)
         self.send_header("Content-Type", cfg["types"].get(path, "application/octet-stream"))
         declared = cfg["declares"].get(path, len(body))
         self.send_header("Content-Length", str(declared))
@@ -135,6 +152,7 @@ def _new_server():
         "stall_for": 2.0,
         "auth_seen": [],
         "redirects": {},
+        "headers": {},
     }
 
     thread = threading.Thread(target=srv.serve_forever, daemon=True)

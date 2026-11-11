@@ -83,3 +83,21 @@ signature may have expired by the time anyone reads it).
 
 `verify` cannot prove the manifest itself is authentic — it is unsigned. What it
 proves is that the bytes on disk are the bytes the manifest records.
+
+## Remote re-check
+
+`--against-remote` closes that gap as far as it can be closed: it resolves
+`target` again and compares each row's recorded `checksum` with what the source
+publishes **now**. It is off by default and makes network requests only when
+asked.
+
+| `remote` | Meaning | Fails? |
+| --- | --- | --- |
+| `remote_match` | the source agrees | no |
+| `remote_mismatch` | the row and the source disagree | **yes, even if the local hash is `ok`** |
+| `remote_no_checksum` | nothing published, or nothing recorded | no |
+| `remote_unavailable` | could not ask (removed source, 404, network) | only with `--require-remote` |
+
+A successful check writes `remote_checked_at`. `remote_no_checksum` and
+`remote_unavailable` are the honest answers — they are never reported as a
+match.

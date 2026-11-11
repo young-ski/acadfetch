@@ -206,7 +206,9 @@ def peek_schema(path: Path) -> int | None:
     return value if isinstance(value, int) else None
 
 
-def verify_manifest(path: Path, root: Path, allow_escape: bool = False) -> list[dict]:
+def verify_manifest(
+    path: Path, root: Path, allow_escape: bool = False, data: dict | None = None
+) -> list[dict]:
     """Re-hash every recorded file. Returns one row per file.
 
     A name is only allowed to point inside ``root`` unless ``allow_escape`` is
@@ -214,7 +216,7 @@ def verify_manifest(path: Path, root: Path, allow_escape: bool = False) -> list[
     outside the directory while reporting ``ok`` is how a green result stops
     meaning anything.
     """
-    data = load(path)
+    data = load(path) if data is None else data
     rows = []
     for entry in data.get("files") or []:
         name = entry.get("name") if isinstance(entry, dict) else None

@@ -205,6 +205,9 @@ before duplicates were resolved.
 
 `acadfetch verify` recomputes SHA-256 for each entry and exits non-zero on any
 mismatch or missing file; rows the run never selected are reported `skipped`.
+Add `--against-remote` to ask the source again and compare what it publishes
+now: a manifest someone rewrote stops agreeing even though the bytes still match
+it. `--require-remote` makes an unreachable source a failure.
 Commit the manifest next to your analysis; it is what makes the download
 reproducible a year later.
 
