@@ -226,7 +226,7 @@ def test_retries_flag_reaches_the_transfer_layer(monkeypatch, capsys):
     _stub_resolve(monkeypatch)
     seen = {}
 
-    def fake_fetch(record, opts, client, only=None):
+    def fake_fetch(record, opts, client, only=None, globs=None):
         seen["retries"] = opts.retries
         return []
 
@@ -331,7 +331,7 @@ def test_interrupt_exits_130_and_still_writes_the_manifest(monkeypatch, capsys, 
 
     _stub_resolve(monkeypatch)
 
-    def fake_fetch(record, opts, client, only=None):
+    def fake_fetch(record, opts, client, only=None, globs=None):
         opts.interrupted = True
         return [Result(record.files[0], "failed", error="interrupted")]
 

@@ -22,6 +22,7 @@ from . import auth, consts, debug, manifest, naming, urls, verify
 from . import remote as remote_check
 from .client import Client
 from .downloader import Options, check_disk, check_total, fetch_record, human
+from .downloader import matches as downloader_matches
 from .errors import AcFError, PartialError, TargetError
 from .progress import Progress
 from .sources import doi, registry, removed
@@ -267,35 +268,56 @@ def _emit(doc: dict) -> None:
     print(json.dumps(doc, ensure_ascii=False))
 
 
-def _print_header(record, hide=urls.redact) -> None:  # noqa: ANN001
-    print(f"title   : {record.title or '(untitled)'}")
+def _print_header(record, hide=urls.redact, stream=None) -> None:  # noqa: ANN001
+    out = sys.stdout if stream is None else stream
+    print(f"title   : {record.title or '(untitled)'}", file=out)
     if record.doi:
-        print(f"doi     : {record.doi}")
-    print(f"license : {record.license or 'UNKNOWN - check before redistributing'}")
+        print(f"doi     : {record.doi}", file=out)
+    print(f"license : {record.license or 'UNKNOWN - check before redistributing'}", file=out)
     total = record.total_bytes
-    print(f"files   : {len(record.files)}" + (f", {human(total)}" if total is not None else ""))
+    print(
+        f"files   : {len(record.files)}" + (f", {human(total)}" if total is not None else ""),
+        file=out,
+    )
     if record.landing:
-        print(f"landing : {hide(record.landing)}")
+        print(f"landing : {hide(record.landing)}", file=out)
 
 
-def _no_match(record, only, args) -> int:  # noqa: ANN001
-    """An unknown --only name is a failure that can name the candidates."""
+def _write_urls(files, out_dir, target) -> None:  # noqa: ANN001
+    lines = []
+    for file in files:
+        lines.append(file.url)
+        lines.append(f"  out={naming.sanitize(file.name)}")
+        lines.append(f"  dir={out_dir}")
+    text = "\n".join(lines) + "\n"
+    if target == "-":
+        sys.stdout.write(text)
+        return
+    Path(target).write_text(text, "utf-8")
+    print(f"{len(files)} url(s) -> {target}", file=sys.stderr)
+
+
+def _no_match(record, args) -> int:  # noqa: ANN001
+    """A filter that matched nothing is a failure that can name the candidates."""
     available = ", ".join(naming.sanitize(f.name) for f in record.files[:8]) or "(none)"
-    message = f"no file matched --only {', '.join(only)}; available: {available}"
+    wanted = " ".join(
+        part
+        for part in (
+            f"--only {', '.join(args.only)}" if args.only else "",
+            f"--glob {', '.join(args.globs)}" if args.globs else "",
+        )
+        if part
+    )
+    message = f"no file matched {wanted}; available: {available}"
     print(f"acadfetch: {message}", file=sys.stderr)
     _emit_error(args, message)
     return EXIT_FAIL
 
 
-def _selected(record, only: list[str] | None):  # noqa: ANN001, ANN202
-    if not only:
+def _selected(record, args):  # noqa: ANN001, ANN202
+    if not args.only and not args.globs:
         return record.files
-    wanted = {n.lower() for n in only}
-    return [
-        f
-        for f in record.files
-        if naming.sanitize(f.name).lower() in wanted or f.name.lower() in wanted
-    ]
+    return [f for f in record.files if downloader_matches(f, args.only, args.globs)]
 
 
 def cmd_fetch(args: argparse.Namespace) -> int:
@@ -316,15 +338,27 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         license=record.license,
         landing=_hide(record.landing, args),
     )
+    # A URL list on stdout must stay machine-readable, so the header and the
+    # token line move to stderr for --urls.
+    header = sys.stderr if args.urls else sys.stdout
     if not args.json:
-        _print_header(record, lambda value: _hide(value, args))
+        _print_header(record, lambda value: _hide(value, args), stream=header)
     token = _token_for(args, record)
     if token and not args.json:
-        print(f"auth    : token from {token}")
+        print(f"auth    : token from {token}", file=header)
 
     out_dir = Path(args.out or f"acadfetch-out/{record.source}-{_slug(record)}")
     doc["out"] = str(out_dir)
     doc["dry_run"] = bool(args.dry_run)
+
+    if args.urls:
+        if args.json:
+            raise TargetError("--urls writes a text list; drop --json")
+        chosen = _selected(record, args)
+        if not chosen:
+            return _no_match(record, args)
+        _write_urls(chosen, out_dir, args.urls)
+        return EXIT_OK
     # Say whether a credential was stripped, so a script can tell the manifest
     # is not replayable as-is.
     doc["url_redacted"] = record.target != _hide(record.target, args) or record.landing != _hide(
@@ -345,9 +379,9 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     )
 
     if args.dry_run:
-        chosen = _selected(record, args.only)
+        chosen = _selected(record, args)
         if not chosen:
-            return _no_match(record, args.only, args)
+            return _no_match(record, args)
         if args.max_size:
             check_total(replace(record, files=chosen), args.max_size)
         try:
@@ -388,9 +422,9 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         return EXIT_OK
 
     try:
-        results = fetch_record(record, opts, client, only=args.only)
+        results = fetch_record(record, opts, client, only=args.only, globs=args.globs)
     except PartialError:
-        return _no_match(record, args.only, args)
+        return _no_match(record, args)
     finally:
         progress.finish()
 
@@ -424,7 +458,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         token,
         # Which files this run asked for: a --only run must not look like a
         # run that fetched everything and then lost most of it.
-        selected_ids={id(f) for f in _selected(record, args.only)},
+        selected_ids={id(f) for f in _selected(record, args)},
         redact=not args.record_full_url,
     )
     code = EXIT_OK
@@ -708,6 +742,19 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="+",
         metavar="NAME",
         help="fetch only these file names",
+    )
+    fetch.add_argument(
+        "--glob",
+        nargs="+",
+        dest="globs",
+        metavar="PATTERN",
+        help="fetch only files whose name matches a shell pattern, e.g. '*.pdf'",
+    )
+    fetch.add_argument(
+        "-w",
+        "--urls",
+        metavar="PATH",
+        help="write an aria2-compatible URL list instead of downloading; '-' is stdout",
     )
     fetch.add_argument("--manifest-out", help="also write the manifest here")
     fetch.add_argument("-n", "--dry-run", action="store_true", help="list what would be fetched")

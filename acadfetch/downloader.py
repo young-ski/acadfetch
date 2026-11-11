@@ -13,6 +13,7 @@ Resume is built on three ideas:
 from __future__ import annotations
 
 import contextlib
+import fnmatch
 import json
 import os
 import random
@@ -609,8 +610,24 @@ def _attempt(
     )
 
 
+def matches(file: File, only: list[str] | None, globs: list[str] | None) -> bool:
+    """Whether a file passes the ``--only`` / ``--glob`` filters."""
+    name = naming.sanitize(file.name).lower()
+    if (
+        only
+        and name not in {n.lower() for n in only}
+        and file.name.lower() not in {n.lower() for n in only}
+    ):
+        return False
+    return not globs or any(fnmatch.fnmatch(name, glob.lower()) for glob in globs)
+
+
 def fetch_record(
-    record: Record, opts: Options, client: Client, only: list[str] | None = None
+    record: Record,
+    opts: Options,
+    client: Client,
+    only: list[str] | None = None,
+    globs: list[str] | None = None,
 ) -> list[Result]:
     """Fetch every file of ``record``, surviving a Ctrl-C.
 
@@ -619,25 +636,24 @@ def fetch_record(
     """
     _STOP.clear()
     try:
-        return _fetch_record(record, opts, client, only)
+        return _fetch_record(record, opts, client, only, globs)
     finally:
         _STOP.clear()
 
 
 def _fetch_record(
-    record: Record, opts: Options, client: Client, only: list[str] | None = None
+    record: Record,
+    opts: Options,
+    client: Client,
+    only: list[str] | None = None,
+    globs: list[str] | None = None,
 ) -> list[Result]:
     if opts.out.exists() and not opts.out.is_dir():
         raise TargetError(f"-o must be a directory, and {opts.out} is a file")
     opts.out.mkdir(parents=True, exist_ok=True)
     files = record.files
-    if only:
-        wanted = {n.lower() for n in only}
-        files = [
-            f
-            for f in files
-            if naming.sanitize(f.name).lower() in wanted or f.name.lower() in wanted
-        ]
+    if only or globs:
+        files = [f for f in files if matches(f, only, globs)]
         if not files:
             raise PartialError([])
 

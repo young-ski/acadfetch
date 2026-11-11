@@ -111,6 +111,15 @@ two never interleave:
 acadfetch fetch zenodo:123456 --json | jq -r '.files[] | select(.state=="failed") | .name'
 ```
 
+To hand the bytes to another downloader, `-w/--urls` writes an aria2-compatible
+list (`-` is stdout) and transfers nothing:
+
+```bash
+acadfetch fetch zenodo:123456 -w - --glob '*.csv' | aria2c -i -
+```
+
+`--glob` takes shell patterns and combines with `--only` (both must pass).
+
 Exit codes are unchanged, and a failure before any transfer still produces a
 document with `error` set. `report` is the document's schema version (now `2`, field reference in
 [docs/json-report.md](docs/json-report.md)):
