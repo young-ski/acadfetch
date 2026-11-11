@@ -207,6 +207,12 @@ pre-1.0: a minor bump may break a flag.
 
 ### CI
 
+- A nightly job downloads and verifies three fixed public records and opens (or
+  appends to) a `live-smoke` issue on failure, closing it on recovery. It is not
+  on push/PR, so a slow repository never blocks a merge.
+- E2 in the first-success bench no longer has `continue-on-error`: the stall
+  regression that it was written to catch can be red again.
+
 - CI and the release called two hand-copied gate lists, and they had already
   drifted: the release ran bare `pytest` with no coverage floor, no `-W error`, no
   `twine check` and no wheel-content assertions, under a comment claiming they

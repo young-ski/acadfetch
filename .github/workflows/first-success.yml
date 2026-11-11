@@ -1,8 +1,9 @@
 name: First success
 
 # Dispatch-only: the numbers here are the E3 profile of the first-success bench.
-# Deliberately not on push/PR — a slow zenodo.org must not block a merge. Read the
-# uploaded CSV, do not read the colour: today E2 is expected to be red.
+# Deliberately not on push/PR — a slow zenodo.org must not block a merge. The
+# colour is a signal now: E2 is a deterministic 2 s stall and is red when the
+# poll loop regresses; the uploaded CSV is the evidence either way.
 
 on:
   workflow_dispatch:
@@ -45,10 +46,9 @@ jobs:
         run: python -m acadfetch --version
 
       # E2: the deterministic profile. One 2 s stall mid-body; the poll loop is
-      # what has to survive it. continue-on-error so the run stays green while the
-      # defect is open — the CSV row is the evidence, not the colour.
+      # what has to survive it. It failed 0/4 before the poll was fixed, so it is
+      # not allowed to pass quietly now.
       - name: E2-stall
-        continue-on-error: true
         shell: bash
         run: |
           python scripts/netem_proxy.py --port 8899 --rate 1048576 \

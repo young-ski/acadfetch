@@ -260,6 +260,10 @@ honest way to test this code path.
 
 ## Getting involved
 
+A nightly job downloads three fixed public records and verifies them, so a
+rotted adapter opens an issue before a user reports one. It never blocks a
+merge; the next good night closes the issue.
+
 - **Stuck on something** → [docs/troubleshooting.md](docs/troubleshooting.md) first; it is short and indexed by symptom
 - **Usage questions** → [Discussions](https://github.com/young-ski/acadfetch/discussions)
 - **Bugs** → the bug template; say whether `verify` reports `MISMATCH`
