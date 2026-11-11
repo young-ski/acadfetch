@@ -6,6 +6,17 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-11
+
+### CI
+
+- A `workflow_dispatch` run at a branch used to publish: the guard only runs on
+  tags and `publish` accepted a skipped guard, so an untagged version could
+  reach PyPI with no post-publish smoke. `publish` now requires a tag ref; a
+  branch dispatch runs the gates and stops.
+- The publish and attestation actions are pinned to commit SHAs (all six,
+  `# vX.Y.Z` kept for legibility), so a moved tag cannot change what runs.
+
 ## [0.3.0] - 2026-11-11
 
 ### Added
@@ -207,12 +218,6 @@ pre-1.0: a minor bump may break a flag.
 
 ### CI
 
-- A `workflow_dispatch` run at a branch used to publish: the guard only runs on
-  tags and `publish` accepted a skipped guard, so an untagged version could
-  reach PyPI with no post-publish smoke. `publish` now requires a tag ref; a
-  branch dispatch runs the gates and stops.
-- The publish and attestation actions are pinned to commit SHAs (all six,
-  `# vX.Y.Z` kept for legibility), so a moved tag cannot change what runs.
 
 - A nightly job downloads and verifies three fixed public records and opens (or
   appends to) a `live-smoke` issue on failure, closing it on recovery. It is not
