@@ -34,10 +34,10 @@ jobs:
           - os: ubuntu-latest
             python: "3.10" # the floor, once, on the platform that can run it cheaply
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.ref }}
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
       - run: python -m pip install -e .
@@ -66,7 +66,7 @@ jobs:
           python scripts/first_success.py --env-id "E3-${{ matrix.os }}-${{ matrix.python }}-direct" \
             --attempts ${{ inputs.attempts }} --timeout 180 --csv "bench-${{ matrix.os }}-${{ matrix.python }}.csv"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: bench-${{ matrix.os }}-${{ matrix.python }}
