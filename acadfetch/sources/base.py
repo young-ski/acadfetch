@@ -11,9 +11,9 @@ class File:
     name: str
     size: int | None = None
     checksum: str | None = None
-    #: Tried in order when ``url`` is refused with a 403, e.g. a legacy
-    #: endpoint for the same bytes.
-    fallbacks: list[str] = field(default_factory=list)
+    #: ``"cli"`` when ``--checksum`` supplied it, otherwise ``None`` (the
+    #: source published it, or nobody did).
+    checksum_source: str | None = None
 
 
 @dataclass
@@ -27,6 +27,8 @@ class Record:
     publisher: str = ""
     version: str = ""
     landing: str = ""
+    #: Content-Type of the resolved landing URL, when an adapter saw one.
+    content_type: str = ""
 
     @property
     def total_bytes(self) -> int | None:
@@ -49,6 +51,13 @@ class Result:
     #: The name actually used on disk, which may differ from ``file.name`` once
     #: duplicates are resolved. The manifest records this one.
     name: str | None = None
+    #: Where the bytes actually came from, after redirects, and what the server
+    #: said along the way. ``None`` when no response was read.
+    final_url: str | None = None
+    etag: str | None = None
+    http_status: int | None = None
+    #: RFC 3339 UTC, when the last byte (or the failure) arrived.
+    retrieved_at: str | None = None
 
     @property
     def ok(self) -> bool:

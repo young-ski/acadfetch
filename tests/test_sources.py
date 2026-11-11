@@ -6,9 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from acadfetch import verify
-from acadfetch.errors import SourceError, TargetError
-from acadfetch.sources import arxiv, direct, doi, figshare, registry, zenodo
+from acadfetch.errors import TargetError
+from acadfetch.sources import arxiv, direct, doi, registry, zenodo
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -63,8 +62,6 @@ ZENODO = {
         (zenodo, "10.5281/zenodo.42", "42"),
         (zenodo, "https://zenodo.org/records/42", "42"),
         (zenodo, "https://zenodo.org/doi/10.5281/zenodo.42", "42"),
-        (figshare, "figshare:9", "9"),
-        (figshare, "10.6084/m9.figshare.9", "9"),
         (arxiv, "2401.12345", "2401.12345"),
         (arxiv, "arxiv:2401.12345v2", "2401.12345v2"),
         (arxiv, "https://arxiv.org/abs/2401.12345", "2401.12345"),
@@ -78,7 +75,6 @@ def test_adapters_match(adapter, target, expected):
     "adapter,target",
     [
         (zenodo, "zenodo:abc"),
-        (figshare, "figshare:x"),
         (arxiv, "not-an-id"),
         (direct, "zenodo:42"),
     ],
@@ -170,84 +166,6 @@ def test_unregistered_doi_raises():
         doi.resolve(client, "10.9999/nope")
 
 
-# -- figshare, against the captured payload -------------------------------
-
-# Captured verbatim from api.figshare.com on 2026-10-25 (article 32519553, a real
-# public record); the bytes in figshare_file.pdf are the real file and hash to
-# the md5 the payload publishes.
-ARTICLE = "32519553"
-NAME = "3_Summary of Findings Across Studies_20261024_v2.pdf"
-MD5 = "bbde85208529e663141a0e8cb6fa9c4a"
-SIZE = 193410
-PDF = (FIXTURES / "figshare_file.pdf").read_bytes()
-
-
-def figshare_record(payload: dict | None = None) -> dict:
-    payload = payload if payload is not None else fixture("figshare_article.json")
-    return figshare.resolve(FakeClient({f"articles/{ARTICLE}": payload}), f"figshare:{ARTICLE}")
-
-
-def test_figshare_resolve_maps_the_payload():
-    record = figshare_record()
-    assert [f.name for f in record.files] == [NAME]
-    assert record.source == "figshare"
-    assert record.title.startswith("3_Summary of Main Findings")
-    assert record.doi == "10.6084/m9.figshare.32519553.v10"
-    assert record.license == "CC BY 4.0"
-    assert record.publisher == "Figshare"
-    assert record.landing.endswith("/32519553")
-    assert record.total_bytes == SIZE
-    assert record.files[0].size == SIZE
-
-
-def test_figshare_prefers_the_download_url_and_keeps_the_legacy_one():
-    (only,) = figshare_record().files
-    assert only.url == "https://ndownloader.figshare.com/files/70600233"
-    assert only.fallbacks == [
-        "https://api.figshare.com/v2/articles/32519553/files/70600233/download"
-    ]
-
-
-def test_figshare_without_a_download_url_uses_the_legacy_endpoint():
-    """The payload field is optional, so the fallback path is exercised separately."""
-    payload = fixture("figshare_article.json")
-    payload["files"].append({"id": 70600234, "name": "notes.txt", "size": 12})
-    record = figshare.resolve(FakeClient({f"articles/{ARTICLE}": payload}), f"figshare:{ARTICLE}")
-    notes = record.files[1]
-    assert notes.url == "https://api.figshare.com/v2/articles/32519553/files/70600234/download"
-    assert notes.fallbacks == []
-    assert notes.checksum is None
-
-
-def test_figshare_uses_computed_md5_not_the_supplied_one():
-    payload = fixture("figshare_article.json")
-    payload["files"][0]["supplied_md5"] = "0" * 32  # what the uploader claimed
-    algo, expected = verify.parse(figshare_record(payload).files[0].checksum)
-    assert algo == "md5"
-    assert expected == MD5
-
-
-def test_figshare_payload_matches_the_stored_bytes():
-    """Guards the fixture itself: if one side is swapped, this fails."""
-    (only,) = figshare_record().files
-    _, expected = verify.parse(only.checksum)
-    assert hashlib.md5(PDF).hexdigest() == expected
-    assert only.size == len(PDF) == SIZE
-
-
-def test_figshare_files_without_url_or_id_are_skipped():
-    payload = fixture("figshare_article.json")
-    payload["files"].append({"name": "ghost.txt"})
-    assert [f.name for f in figshare_record(payload).files] == [NAME]
-
-
-def test_figshare_without_files_raises():
-    payload = fixture("figshare_article.json")
-    payload["files"] = []
-    with pytest.raises(SourceError, match="no downloadable files"):
-        figshare_record(payload)
-
-
 # -- arXiv resolve (no fixture covered it before) -------------------------
 
 ATOM = b"""<?xml version="1.0" encoding="UTF-8"?>
@@ -305,3 +223,95 @@ def test_arxiv_asks_over_https():
     client = OpenClient(ATOM)
     arxiv.resolve(client, "arxiv:2401.12345")
     assert client.url.startswith("https://export.arxiv.org/api/query")
+
+
+# -- the recorded figshare fixture, kept as a real-bytes guard ------------
+
+ARTICLE = "32519553"
+MD5 = "bbde85208529e663141a0e8cb6fa9c4a"
+
+
+def test_the_recorded_payload_matches_the_stored_bytes():
+    """If either side of the fixture is swapped, this fails.
+
+    The adapter is gone; the pair still proves the verify path against a
+    published checksum instead of a synthetic string.
+    """
+    payload = fixture("figshare_article.json")
+    stored = (FIXTURES / "figshare_file.pdf").read_bytes()
+    assert hashlib.md5(stored).hexdigest() == MD5
+    assert payload["files"][0]["computed_md5"] == MD5
+    assert payload["files"][0]["size"] == len(stored)
+
+
+# -- direct: lower-case response headers -----------------------------------
+
+
+class HeadClient(FakeClient):
+    def __init__(self, headers: dict):
+        super().__init__({})
+        self._headers = headers
+
+    def head(self, url):
+        return self._headers
+
+
+def test_direct_reads_lower_case_headers():
+    rec = direct.resolve(
+        HeadClient(
+            {
+                "content-length": "5",
+                "content-disposition": 'attachment; filename="x.csv"',
+                "content-md5": "XUFAKrxLKna5cZ2REBfFkg==",
+            }
+        ),
+        "https://h/a",
+    )
+    (only,) = rec.files
+    assert only.size == 5
+    assert only.name == "x.csv"
+    assert only.checksum == "md5:5d41402abc4b2a76b9719d911017c592"
+    assert only.checksum_source == "header"
+
+
+def test_direct_without_headers_has_no_size_or_source():
+    rec = direct.resolve(HeadClient({}), "https://h/a.csv")
+    (only,) = rec.files
+    assert only.size is None and only.checksum is None and only.checksum_source is None
+
+
+def test_a_missing_licence_is_unknown_not_a_guess():
+    record = arxiv.resolve(OpenClient(ATOM), "arxiv:2401.12345v2")
+    assert record.license == "unknown"
+
+
+def test_the_licence_arxiv_reports_is_used():
+    body = ATOM.replace(
+        b"<title>Distributionally",
+        b'<arxiv:license href="http://arxiv.org/licenses/cc_by/4.0/"/><title>Distributionally',
+    ).replace(
+        b'xmlns="http://www.w3.org/2005/Atom"',
+        b'xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom"',
+    )
+    record = arxiv.resolve(OpenClient(body), "arxiv:2401.12345v2")
+    assert record.license == "cc_by"
+
+
+LEGACY = ATOM.replace(b"2401.12345v2", b"solv-int/9701001v2")
+
+
+def test_a_legacy_id_keeps_its_archive_and_version():
+    """``solv-int/9701001v2`` used to become ``sol`` and lose the paper."""
+    record = arxiv.resolve(OpenClient(LEGACY), "arxiv:solv-int/9701001v2")
+    assert record.files[0].name == "solv-int_9701001.pdf"
+    assert record.doi == "10.48550/arXiv.solv-int/9701001"
+    assert record.version == "2"
+
+
+def test_two_legacy_papers_no_longer_share_a_name():
+    first = arxiv.resolve(OpenClient(LEGACY), "arxiv:solv-int/9701001v2")
+    second = arxiv.resolve(
+        OpenClient(ATOM.replace(b"2401.12345v2", b"solv-int/9701002v1")),
+        "arxiv:solv-int/9701002v1",
+    )
+    assert first.files[0].name != second.files[0].name

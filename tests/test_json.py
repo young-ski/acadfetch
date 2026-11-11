@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -150,7 +151,13 @@ def test_verify_json_flags_a_tampered_file(capsys, tmp_path):
 
     doc = json.loads(out)
     assert code == cli.EXIT_FAIL
-    assert doc["summary"] == {"total": 1, "ok": 0, "bad": 1, "ok_run": False}
+    assert doc["summary"] == {
+        "total": 1,
+        "ok": 0,
+        "bad": 1,
+        "skipped": 0,
+        "ok_run": False,
+    }
     assert doc["rows"][0]["status"] == "MISMATCH"
     assert doc["root"] == str(tmp_path)
 
@@ -163,3 +170,106 @@ def test_dry_run_reports_disk_headroom(served, capsys, tmp_path):
     assert disk["needed"] == len(PAYLOAD) + 6
     assert disk["free"] > disk["needed"]
     assert disk["ok"] is True
+
+
+# -- schema 3: a --only manifest still verifies ---------------------------
+
+
+def test_a_partial_fetch_verifies_clean(served, capsys, tmp_path):
+    """The common path: fetch one file, then verify what you asked for."""
+    out_dir = tmp_path / "o"
+    code, _, _ = _run(capsys, "fetch", "zenodo:1", "--only", "a.bin", "-q", "-o", out_dir)
+    assert code == cli.EXIT_OK
+
+    data = json.loads((out_dir / "manifest.json").read_text("utf-8"))
+    assert data["schema"] == 3
+    assert [(f["state"], f["selected"]) for f in data["files"]] == [
+        ("downloaded", True),
+        ("not-selected", False),
+    ]
+
+    code, out, err = _run(capsys, "verify", out_dir / "manifest.json")
+    assert code == cli.EXIT_OK, err
+    assert "1/2 ok, 1 skipped" in out
+
+    code, _, _ = _run(capsys, "verify", out_dir / "manifest.json", "--require-all")
+    assert code == cli.EXIT_FAIL
+
+
+def test_verify_json_counts_skipped(served, capsys, tmp_path):
+    out_dir = tmp_path / "o"
+    _run(capsys, "fetch", "zenodo:1", "--only", "a.bin", "-q", "-o", out_dir)
+
+    code, out, _ = _run(capsys, "verify", out_dir / "manifest.json", "--json")
+
+    doc = json.loads(out)
+    assert code == cli.EXIT_OK
+    assert doc["summary"] == {"total": 2, "ok": 1, "bad": 0, "skipped": 1, "ok_run": True}
+    assert [row["status"] for row in doc["rows"]] == ["ok", "skipped"]
+    assert doc["rows"][1]["state"] == "not-selected"
+    assert doc["rows"][0]["sha256"]
+
+
+def test_require_all_in_json_is_a_failure(served, capsys, tmp_path):
+    out_dir = tmp_path / "o"
+    _run(capsys, "fetch", "zenodo:1", "--only", "a.bin", "-q", "-o", out_dir)
+
+    code, out, _ = _run(capsys, "verify", out_dir / "manifest.json", "--json", "--require-all")
+
+    doc = json.loads(out)
+    assert code == cli.EXIT_FAIL
+    assert doc["summary"]["bad"] == 1
+    assert doc["summary"]["ok_run"] is False
+
+
+# -- schema 3: credential query parameters --------------------------------
+
+
+def _signed_record(server):
+    signed = server.base + "/a.bin?X-Amz-Signature=SECRET&Expires=1"
+
+    def resolve(_client, _target):
+        return Record(
+            source="direct",
+            target=signed,
+            landing=signed,
+            files=[File(signed, "a.bin", 10)],
+        )
+
+    server.cfg["files"]["/a.bin"] = b"x" * 10
+    return resolve
+
+
+def test_json_redacts_a_presigned_url(server, monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(cli.registry, "resolve", _signed_record(server))
+
+    code, out, _ = _run(capsys, "fetch", "signed", "--json", "-o", tmp_path)
+
+    doc = json.loads(out)
+    assert code == cli.EXIT_OK
+    assert "SECRET" not in out
+    assert doc["url_redacted"] is True
+    assert doc["files"][0]["http_status"] == 200
+    assert doc["files"][0]["final_url"].startswith(server.base)
+
+
+def test_record_full_url_keeps_the_signature(server, monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(cli.registry, "resolve", _signed_record(server))
+
+    code, out, _ = _run(capsys, "fetch", "signed", "--json", "--record-full-url", "-o", tmp_path)
+
+    assert code == cli.EXIT_OK
+    assert "SECRET" in out
+    assert json.loads(out)["url_redacted"] is False
+
+
+def test_the_default_directory_drops_the_query(server, monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(cli.registry, "resolve", _signed_record(server))
+    monkeypatch.chdir(tmp_path)
+
+    code, out, _ = _run(capsys, "fetch", "signed", "--json", "-n")
+
+    assert code == cli.EXIT_OK
+    slug = Path(json.loads(out)["out"]).name
+    assert slug.startswith("direct-127.0.0.1-") and slug.endswith("-a.bin")
+    assert "SECRET" not in slug

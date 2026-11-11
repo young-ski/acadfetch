@@ -7,6 +7,7 @@ target was unusable, 2 partial success, 130 interrupted (partials are kept).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -14,36 +15,36 @@ import time
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from . import auth, consts, manifest, naming
+from . import auth, consts, manifest, naming, urls, verify
 from .client import Client
 from .downloader import Options, check_disk, check_total, fetch_record, human
 from .errors import AcFError, PartialError, TargetError
 from .progress import Progress
-from .sources import doi, registry
+from .sources import doi, registry, removed
 from .verify import reason as verify_reason
 
-EXIT_OK, EXIT_FAIL, EXIT_PARTIAL, EXIT_INTERRUPT = 0, 1, 2, 130
+EXIT_OK, EXIT_FAIL, EXIT_PARTIAL, EXIT_USAGE, EXIT_INTERRUPT = 0, 1, 2, 64, 130
 #: Bumped only when a field changes meaning or disappears. New fields do not.
-REPORT_SCHEMA = 1
+#: 2: file rows carry ``selected``; ``state`` may be ``not-selected``/``planned``.
+REPORT_SCHEMA = 2
 EXAMPLES = {
     "zenodo": "zenodo:123456",
-    "figshare": "figshare:987654",
     "arxiv": "arxiv:2401.12345",
     "doi": "10.5281/zenodo.123456",
-    "direct": "https://example.org/data.tar.gz",
+    "direct": "https://ndownloader.figshare.com/files/70600233/report.pdf",
 }
 EPILOG = """target forms:
   10.5281/zenodo.123456        a DOI
   zenodo:123456                a record id
-  figshare:987654
   arxiv:2401.12345
   https://host/file.tar.gz     any URL
 
 exit codes:
-  0 ok    1 failed    2 partial    130 interrupted (partials kept, rerun to resume)
+  0 ok    1 failed    2 partial    64 bad usage    130 interrupted (partials kept, rerun to resume)
 
-environment: ZENODO_TOKEN, FIGSHARE_TOKEN (sent only to that repository)
+environment: ZENODO_TOKEN (sent only to Zenodo)
 """
 _SIZE = re.compile(r"^(\d+(?:\.\d+)?)\s*([KMGT]i?B?|B?)$", re.I)
 
@@ -98,9 +99,21 @@ def _count(text: str) -> int:
     return value
 
 
+def _checksum(text: str) -> str:
+    """Validate ``--checksum`` before any request is made."""
+    parsed = verify.parse(text)
+    if parsed is None:
+        raise argparse.ArgumentTypeError(f"expected md5:<hex> or sha256:<hex>, got {text!r}")
+    algo, value = parsed
+    if algo not in ("md5", "sha256"):
+        raise argparse.ArgumentTypeError(f"only md5: and sha256: are accepted, got {algo}:")
+    return f"{algo}:{value}"
+
+
 def cmd_sources(_: argparse.Namespace) -> int:
     for name in registry.names():
         print(f"{name:<9} {EXAMPLES.get(name, '')}".rstrip())
+    print(removed.SOURCES_NOTE)
     return EXIT_OK
 
 
@@ -111,6 +124,7 @@ def _client(args: argparse.Namespace) -> Client:
         rate=args.rate,
         retries=args.retries,
         block_retries=args.retry_403,
+        allow_http=args.allow_http,
         headers=_headers(args.header),
         auth={source: token.headers for source, token in tokens.items()},
     )
@@ -156,11 +170,13 @@ def _token_for(args: argparse.Namespace, record):  # noqa: ANN001, ANN202
 def cmd_manifest(args: argparse.Namespace) -> int:
     client = _client(args)
     record = _resolve(args, client)
-    data = manifest.build(record, [], _token_for(args, record))
+    data = manifest.build(
+        record, [], _token_for(args, record), planned=True, redact=not args.record_full_url
+    )
     out = Path(args.out or "manifest.json")
     manifest.write(out, data)
     print(f"{len(record.files)} file(s) -> {out}")
-    _print_header(record)
+    _print_header(record, lambda value: _hide(value, args))
     if token := _token_for(args, record):
         print(f"auth    : token from {token}")
     return EXIT_OK
@@ -177,12 +193,26 @@ def _report(args: argparse.Namespace) -> dict:
     }
 
 
-def _file_row(row) -> dict:  # noqa: ANN001
+def _hide(text: str, args: argparse.Namespace) -> str:
+    """Redact credential query parameters unless --record-full-url asked for
+    the original string."""
+    return text if getattr(args, "record_full_url", False) else urls.redact(text)
+
+
+def _hide_text(text: str, args: argparse.Namespace) -> str:
+    return text if getattr(args, "record_full_url", False) else urls.redact_text(text)
+
+
+def _file_row(row, redact: bool = True) -> dict:  # noqa: ANN001
+    hide = urls.redact if redact else (lambda value: value)
     return {
         "name": naming.sanitize(row.name or row.file.name),
         "size": row.file.size,
         "bytes": row.bytes,
         "state": row.state,
+        "selected": True,
+        "http_status": row.http_status,
+        "final_url": hide(row.final_url) if row.final_url else None,
         "verified": row.verified,
         "verified_reason": verify_reason(row.file.checksum, row.verified),
         "resumed_from": row.resumed_from,
@@ -205,7 +235,7 @@ def _emit(doc: dict) -> None:
     print(json.dumps(doc, ensure_ascii=False))
 
 
-def _print_header(record) -> None:  # noqa: ANN001
+def _print_header(record, hide=urls.redact) -> None:  # noqa: ANN001
     print(f"title   : {record.title or '(untitled)'}")
     if record.doi:
         print(f"doi     : {record.doi}")
@@ -213,7 +243,16 @@ def _print_header(record) -> None:  # noqa: ANN001
     total = record.total_bytes
     print(f"files   : {len(record.files)}" + (f", {human(total)}" if total is not None else ""))
     if record.landing:
-        print(f"landing : {record.landing}")
+        print(f"landing : {hide(record.landing)}")
+
+
+def _no_match(record, only, args) -> int:  # noqa: ANN001
+    """An unknown --only name is a failure that can name the candidates."""
+    available = ", ".join(naming.sanitize(f.name) for f in record.files[:8]) or "(none)"
+    message = f"no file matched --only {', '.join(only)}; available: {available}"
+    print(f"acadfetch: {message}", file=sys.stderr)
+    _emit_error(args, message)
+    return EXIT_FAIL
 
 
 def _selected(record, only: list[str] | None):  # noqa: ANN001, ANN202
@@ -231,16 +270,22 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     started = time.monotonic()
     client = _client(args)
     record = _resolve(args, client)
+    if args.checksum:
+        # Explicit wins over whatever the source published, and over nothing.
+        record = replace(
+            record,
+            files=[replace(f, checksum=args.checksum, checksum_source="cli") for f in record.files],
+        )
     doc = _report(args)
     doc.update(
-        target=record.target,
+        target=_hide(record.target, args),
         source=record.source,
         doi=record.doi,
         license=record.license,
-        landing=record.landing,
+        landing=_hide(record.landing, args),
     )
     if not args.json:
-        _print_header(record)
+        _print_header(record, lambda value: _hide(value, args))
     token = _token_for(args, record)
     if token and not args.json:
         print(f"auth    : token from {token}")
@@ -248,6 +293,11 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     out_dir = Path(args.out or f"acadfetch-out/{record.source}-{_slug(record)}")
     doc["out"] = str(out_dir)
     doc["dry_run"] = bool(args.dry_run)
+    # Say whether a credential was stripped, so a script can tell the manifest
+    # is not replayable as-is.
+    doc["url_redacted"] = record.target != _hide(record.target, args) or record.landing != _hide(
+        record.landing, args
+    )
     # Progress shares stdout with the report, so it moves to stderr under --json.
     progress = Progress(stream=sys.stderr if args.json else None, enabled=not args.quiet)
     opts = Options(
@@ -258,17 +308,19 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         max_bytes=args.max_size,
         progress=progress,
         fsync=not args.no_fsync,
+        force=args.force,
+        explicit_out=bool(args.out),
     )
 
     if args.dry_run:
         chosen = _selected(record, args.only)
         if not chosen:
-            print(f"acadfetch: no file matched --only {', '.join(args.only)}", file=sys.stderr)
-            return EXIT_FAIL
+            return _no_match(record, args.only, args)
         if args.max_size:
             check_total(replace(record, files=chosen), args.max_size)
         try:
-            free, needed = check_disk(chosen, out_dir)
+            # A plan reports the shortfall; it is not yet a failure.
+            free, needed = check_disk(chosen, out_dir, strict=False)
         except OSError:  # a filesystem that will not say; not worth failing for
             free = needed = 0
         disk = {"free": free, "needed": needed, "ok": not needed or free >= needed}
@@ -279,6 +331,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
                     "size": f.size,
                     "bytes": 0,
                     "state": "planned",
+                    "selected": True,
                     "verified": None,
                     "verified_reason": verify_reason(f.checksum, None),
                     "resumed_from": 0,
@@ -305,13 +358,12 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     try:
         results = fetch_record(record, opts, client, only=args.only)
     except PartialError:
-        print(f"acadfetch: no file matched --only {', '.join(args.only)}", file=sys.stderr)
-        return EXIT_FAIL
+        return _no_match(record, args.only, args)
     finally:
         progress.finish()
 
     failures = [r for r in results if not r.ok]
-    doc["files"] = [_file_row(r) for r in results]
+    doc["files"] = [_file_row(r, redact=not args.record_full_url) for r in results]
     doc["summary"] = {
         "total": len(results),
         "downloaded": sum(1 for r in results if r.state == "downloaded"),
@@ -334,7 +386,15 @@ def cmd_fetch(args: argparse.Namespace) -> int:
             # "nothing happened" and the rerun looks like it starts over.
             print(f"     kept {human(row.bytes)} in {Path(row.part).name} - rerun to resume")
 
-    data = manifest.build(record, results, token)
+    data = manifest.build(
+        record,
+        results,
+        token,
+        # Which files this run asked for: a --only run must not look like a
+        # run that fetched everything and then lost most of it.
+        selected_ids={id(f) for f in _selected(record, args.only)},
+        redact=not args.record_full_url,
+    )
     code = EXIT_OK
     try:
         manifest.write(out_dir / "manifest.json", data)
@@ -381,21 +441,43 @@ def cmd_verify(args: argparse.Namespace) -> int:
         print(manifest.SCHEMA_1_NOTE, file=sys.stderr)
     doc["root"] = str(root)
     rows = manifest.verify_manifest(manifest_path, root, allow_escape=args.allow_escape)
-    bad = sum(1 for row in rows if row["status"] != "ok")
+    skipped = sum(1 for row in rows if row["status"] == "skipped")
+    hard = sum(1 for row in rows if row["status"] not in ("ok", "skipped"))
+    # --require-all turns "you never asked for it" into a failure; the plain
+    # default does not, because a --only manifest is a complete description of
+    # the files it did fetch.
+    bad = hard + (skipped if args.require_all else 0)
+    ok = len(rows) - hard - skipped
     if not args.json:
         for row in rows:
             print(f"{row['status']:>9} {row['name']}")
-        print()
-        print(f"{len(rows) - bad}/{len(rows)} ok")
+        if rows:
+            print()
+            tally = f"{ok}/{len(rows)} ok"
+            if skipped:
+                tally += f", {skipped} skipped"
+            print(tally)
     if not args.allow_escape and any(row["status"] == "escaped" for row in rows):
         print(f"some names leave {root} - --allow-escape follows them", file=sys.stderr)
     doc["rows"] = [
-        {k: row[k] for k in ("name", "status", "expected", "actual") if k in row} for row in rows
+        {k: row[k] for k in ("name", "status", "state", "sha256", "expected", "actual") if k in row}
+        for row in rows
     ]
-    doc["summary"] = {"total": len(rows), "ok": len(rows) - bad, "bad": bad, "ok_run": not bad}
+    doc["summary"] = {
+        "total": len(rows),
+        "ok": ok,
+        "bad": bad,
+        "skipped": skipped,
+        "ok_run": bool(rows) and not bad,
+    }
     if not rows:
         print("the manifest lists no files", file=sys.stderr)
         doc["error"] = "the manifest lists no files"
+    elif skipped and not args.require_all:
+        print(
+            f"{skipped} file(s) were not selected (-n/--only); --require-all counts them",
+            file=sys.stderr,
+        )
     if args.json:
         _emit(doc)
     if not rows:
@@ -404,13 +486,31 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 
 def _slug(record) -> str:  # noqa: ANN001
+    """A directory name that identifies the target, not only its filename.
+
+    ``data.csv`` from two hosts is two different datasets; the host and a short
+    hash of the full URL keep them apart. A DOI is already unique.
+    """
     if record.doi:
         return naming.sanitize(record.doi.replace("/", "_"))
-    return naming.sanitize(record.target.rsplit("/", 1)[-1] or "record")
+    parts = urlsplit(record.target)
+    path = parts.path or record.target
+    name = naming.sanitize(path.rsplit("/", 1)[-1] or "record")
+    host = naming.sanitize(parts.hostname or "host")
+    digest = hashlib.sha256(record.target.encode("utf-8", "replace")).hexdigest()[:8]
+    return f"{host}-{digest}-{name}"
+
+
+class Parser(argparse.ArgumentParser):
+    """Usage errors are not "partial": exit 64 keeps 2 meaning a partial run."""
+
+    def error(self, message: str) -> None:  # noqa: D102
+        self.print_usage(sys.stderr)
+        self.exit(EXIT_USAGE, f"{self.prog}: error: {message}\n")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = Parser(
         prog="acadfetch",
         description="Resumable, rate-limited, checksum-verified bulk downloads from data repositories.",
         epilog=EPILOG,
@@ -447,16 +547,26 @@ def build_parser() -> argparse.ArgumentParser:
             help="extra request header, repeatable (e.g. 'Authorization: Bearer <token>')",
         )
         p.add_argument(
+            "--allow-http",
+            action="store_true",
+            help="keep Authorization on an https -> http redirect hop",
+        )
+        p.add_argument(
             "--no-token",
             action="store_true",
-            help="ignore $ZENODO_TOKEN / $FIGSHARE_TOKEN",
+            help="ignore $ZENODO_TOKEN",
         )
 
-    fetch = sub.add_parser("fetch", help="download every file of a record")
+    fetch = sub.add_parser(
+        "fetch",
+        help="download every file of a record",
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     fetch.add_argument(
         "target",
         nargs="?",
-        help="DOI, zenodo:<id>, figshare:<id>, arxiv:<id>, or URL",
+        help="DOI, zenodo:<id>, arxiv:<id>, or URL",
     )
     fetch.add_argument(
         "-o", "--out", help="output directory (default: acadfetch-out/<source>-<id>)"
@@ -470,14 +580,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fetch.add_argument("--max-size", type=parse_size, help="abort above this total, e.g. 500MB")
     fetch.add_argument(
+        "--checksum",
+        type=_checksum,
+        metavar="ALGO:HEX",
+        help="verify against this checksum instead (md5:<hex> or sha256:<hex>), "
+        "for sources that publish none; required when migrating a figshare target",
+    )
+    fetch.add_argument(
         "--only",
         nargs="+",
         metavar="NAME",
-        help="fetch only these file names; put the target first, or the names swallow it",
+        help="fetch only these file names",
     )
     fetch.add_argument("--manifest-out", help="also write the manifest here")
     fetch.add_argument("-n", "--dry-run", action="store_true", help="list what would be fetched")
     fetch.add_argument("-q", "--quiet", action="store_true", help="no progress line")
+    fetch.add_argument(
+        "--force",
+        action="store_true",
+        help="fetch again even when a matching file is already there",
+    )
     fetch.add_argument(
         "--no-fsync",
         action="store_true",
@@ -488,12 +610,23 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print one JSON report to stdout, progress to stderr",
     )
+    fetch.add_argument(
+        "--record-full-url",
+        action="store_true",
+        help="keep credential query parameters (X-Amz-Signature, token, …) in "
+        "the manifest and on stdout instead of stripping them",
+    )
     network_flags(fetch)
     fetch.set_defaults(func=cmd_fetch)
 
     man = sub.add_parser("manifest", help="write a manifest without downloading")
     man.add_argument("target")
     man.add_argument("-o", "--out")
+    man.add_argument(
+        "--record-full-url",
+        action="store_true",
+        help="keep credential query parameters in the manifest",
+    )
     network_flags(man)
     man.set_defaults(func=cmd_manifest)
 
@@ -507,6 +640,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-escape",
         action="store_true",
         help="follow names that leave --root (a manifest can point outside it)",
+    )
+    ver.add_argument(
+        "--require-all",
+        action="store_true",
+        help="count a file that was never selected (--only, or a manifest-only "
+        "run) as a failure instead of skipping it",
     )
     ver.add_argument(
         "--json",
@@ -530,8 +669,10 @@ def main(argv: list[str] | None = None) -> int:
     _recover_target(args)
     if getattr(args, "command", "") == "fetch" and getattr(args, "target", None) is None:
         message = (
-            "which record? put a target after --only, e.g. "
-            "acadfetch fetch zenodo:123456 --only raw.tar.gz"
+            "which record? try one of:\n"
+            "  acadfetch fetch 10.5281/zenodo.23612969\n"
+            "  acadfetch fetch arxiv:1706.03762\n"
+            "  acadfetch fetch https://ndownloader.figshare.com/files/70600233/report.pdf"
         )
         print(f"acadfetch: {message}", file=sys.stderr)
         _emit_error(args, message)
@@ -539,8 +680,15 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.func(args)
     except AcFError as exc:  # TargetError is one
-        print(f"acadfetch: {exc}", file=sys.stderr)
-        _emit_error(args, str(exc))
+        # An error sentence carries the URL, and that URL may carry a signature.
+        message = _hide_text(str(exc), args)
+        print(f"acadfetch: {message}", file=sys.stderr)
+        _emit_error(args, message)
+        return EXIT_FAIL
+    except OSError as exc:  # a filesystem surprise, not a bug report
+        message = f"{exc.strerror or exc}" if exc.filename else str(exc)
+        print(f"acadfetch: {message}", file=sys.stderr)
+        _emit_error(args, message)
         return EXIT_FAIL
     except KeyboardInterrupt:
         print("\ninterrupted - partial files kept, rerun to resume", file=sys.stderr)

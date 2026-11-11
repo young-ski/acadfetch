@@ -29,16 +29,19 @@ If the public resolver answers and yours does not, either fix DNS
 (`%WINDIR%\System32\drivers\etc\hosts` on Windows) for the length of the job and
 remove it afterwards -- a pinned address outlives a CDN change.
 
-## `403` from `api.figshare.com`
+## `403` with an HTML body
 
-That API sits behind a WAF that answers a block page to non-browser clients. Two
-block-page retries are the default; `--retry-403 0` skips them and fails at once,
-`--retry-403 5` tries harder. A 403 from the API's own permission check is JSON
-and stays terminal either way.
+A CDN or WAF in front of the URL answered a block page. Two block-page retries
+are the default; `--retry-403 0` skips them and fails at once,
+`--retry-403 5` tries harder. A 403 whose body is the application's own JSON is
+a permission answer and stays terminal either way.
 
-On some networks it never clears. Downloads themselves use `ndownloader`, which
-the WAF does not touch -- so `--retry-403 0` plus a direct `ndownloader` URL is a
-workable fallback.
+## `figshare support was removed in 0.2.0`
+
+Expected: the adapter is gone. Convert the target to the article's
+`ndownloader` URL and pass `--checksum`; the recipe, and the fact that existing
+figshare manifests still verify, is in
+[docs/migration-0.2.md](migration-0.2.md).
 
 ## `server answered text/html for 'paper.pdf'`
 

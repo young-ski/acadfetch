@@ -32,6 +32,7 @@ def test_sources_lists_adapters(capsys):
     assert cli.main(["sources"]) == 0
     out = capsys.readouterr().out
     assert "zenodo" in out and "doi" in out
+    assert "figshare  removed in 0.2.0" in out
 
 
 def test_bad_target_exit_1(capsys):
@@ -383,7 +384,9 @@ def test_dry_run_prints_the_destination(monkeypatch, capsys):
 def test_dry_run_applies_only(monkeypatch, capsys):
     _stub_resolve(monkeypatch)
     assert cli.main(["fetch", "zenodo:1", "-n", "--only", "nope"]) == 1
-    assert "no file matched" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "no file matched" in err
+    assert "available:" in err, "say which names exist, not only that one did not"
 
 
 def test_max_size_is_refused_before_any_bytes(monkeypatch, capsys):
@@ -402,3 +405,24 @@ def test_max_size_is_refused_before_any_bytes(monkeypatch, capsys):
 def test_sources_shows_a_usable_example(capsys):
     assert cli.main(["sources"]) == 0
     assert "zenodo:123456" in capsys.readouterr().out
+
+
+def test_fetch_without_a_target_names_three_commands(capsys):
+    assert cli.main(["fetch"]) == 1
+    err = capsys.readouterr().err
+    assert err.count("acadfetch fetch ") == 3
+    for gap in ("zenodo", "arxiv", "ndownloader"):
+        assert gap in err
+
+
+def test_fetch_help_carries_the_target_forms_and_codes(capsys):
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["fetch", "--help"])
+    out = capsys.readouterr().out
+    assert "target forms:" in out and "exit codes:" in out
+    assert "64 bad usage" in out
+
+
+def test_the_direct_example_is_a_real_url(capsys):
+    cli.main(["sources"])
+    assert "ndownloader.figshare.com" in capsys.readouterr().out

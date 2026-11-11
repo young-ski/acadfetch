@@ -20,14 +20,15 @@ import shutil
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from http.client import HTTPException
 from pathlib import Path
 
 from . import atomic, naming, verify
 from .client import Client
 from .consts import CHUNK
-from .errors import HttpError, PartialError
+from .errors import HttpError, LocalError, PartialError, TargetError
 from .progress import Progress
 from .sources.base import File, Record, Result
 from .units import human
@@ -70,6 +71,17 @@ _BINARY_EXT = frozenset(
 META_SUFFIX = ".part.meta.json"
 
 
+@dataclass(frozen=True)
+class Transfer:
+    """What one attempt actually did, for the manifest's provenance fields."""
+
+    written: int = 0
+    final_url: str | None = None
+    etag: str | None = None
+    http_status: int | None = None
+    retrieved_at: str | None = None
+
+
 @dataclass
 class Options:
     out: Path
@@ -83,6 +95,13 @@ class Options:
     interrupted: bool = False
     #: Flush each finished ``.part`` to the platter before it is renamed.
     fsync: bool = True
+    #: Re-download even when a matching file is already there.
+    force: bool = False
+    #: ``-o`` was given, so the directory is the user's choice, not a guess.
+    explicit_out: bool = False
+    #: name -> url recorded by an earlier manifest in ``out``, filled by
+    #: :func:`fetch_record`. Without a checksum it is what ties a file to a URL.
+    trusted: dict[str, str] = field(default_factory=dict)
 
 
 # Live responses, so an interrupt can abort a read that is blocked on a socket
@@ -98,6 +117,11 @@ def _abort_open_transfers() -> None:
     for resp in live:
         with contextlib.suppress(Exception):  # noqa: BLE001 - closing is best effort
             resp.close()
+
+
+def _now() -> str:
+    """RFC 3339 UTC, second resolution: what the manifest records."""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _read_meta(path: Path) -> dict:
@@ -209,8 +233,8 @@ def _chunks(resp, idle_timeout: float, url: str):  # noqa: ANN001, ANN202
         yield chunk
 
 
-def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Options) -> int:
-    """Move bytes into ``part``, resuming if possible. Returns bytes written."""
+def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Options) -> Transfer:
+    """Move bytes into ``part``, resuming if possible. Returns what happened."""
     meta = _read_meta(meta_path) if part.exists() else {}
     if meta.get("url") not in (None, file.url):
         _drop(part, meta_path)
@@ -229,14 +253,13 @@ def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Opt
             headers["If-Range"] = validator
 
     written = 0
-    resumed = 0
     # One attempt here: the caller owns the retry budget for bytes, because it
     # is the one that knows about resume points and fallback URLs.
     try:
         resp = client.open(file.url, headers, attempts=1)
     except HttpError as exc:
         if exc.status == 416 and have:
-            return 0  # already complete
+            return Transfer(0)  # already complete
         raise
 
     with resp:
@@ -267,7 +290,7 @@ def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Opt
         if whole:
             mode, offset = "wb", 0
         else:
-            mode, offset, resumed = "ab", have, have
+            mode, offset = "ab", have
         _write_meta(
             meta_path,
             {
@@ -318,9 +341,13 @@ def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Opt
                 _LIVE.discard(resp)
         if declared is not None and declared != written:
             raise HttpError(0, file.url, f"read {written} bytes, response declared {declared}")
-    if resumed:
-        return written
-    return written
+        return Transfer(
+            written=written,
+            final_url=resp.geturl() or file.url,
+            etag=resp.headers.get("ETag"),
+            http_status=status,
+            retrieved_at=_now(),
+        )
 
 
 DISK_MARGIN = 64 * 1024 * 1024
@@ -334,7 +361,25 @@ def _existing(path: Path) -> Path:
     return path
 
 
-def check_disk(files, out: Path, *, margin: int = DISK_MARGIN) -> tuple[int, int]:  # noqa: ANN001
+def _trusted_urls(manifest_path: Path) -> dict[str, str]:
+    """name -> url pairs an earlier manifest in the same directory recorded."""
+    try:
+        data = json.loads(manifest_path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    rows = data.get("files") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        return {}
+    return {
+        row["name"]: row.get("url")
+        for row in rows
+        if isinstance(row, dict) and isinstance(row.get("name"), str)
+    }
+
+
+def check_disk(
+    files, out: Path, *, margin: int = DISK_MARGIN, strict: bool = True
+) -> tuple[int, int]:  # noqa: ANN001
     """Refuse a run that cannot fit, before it spends a night on 97% of it.
 
     Returns ``(free, needed)``. Only files with a published size can be counted;
@@ -355,15 +400,48 @@ def check_disk(files, out: Path, *, margin: int = DISK_MARGIN) -> tuple[int, int
     if needed <= 0:
         return (0, 0)
     free = shutil.disk_usage(_existing(out)).free
-    if free < needed + margin:
-        raise HttpError(
-            0,
-            str(out),
+    if strict and free < needed + margin:
+        raise LocalError(
             f"needs {human(needed)} but {human(free)} is free in {out} "
-            f"(keeps {human(margin)} spare; free space or choose -o)",
-            reason="disk",
+            f"(keeps {human(margin)} spare; free space or choose -o)"
         )
     return (free, needed)
+
+
+def _reserved(files) -> set[str]:  # noqa: ANN001
+    """Names the tool itself will write, so a repository file cannot take them.
+
+    A file the repository happens to call ``manifest.json`` was overwritten by
+    our manifest, and a file called ``x.part`` was swallowed by ``x``'s sidecar.
+    Reserving the derived names is cheaper than teaching every later step to
+    dodge them.
+    """
+    reserved = {"manifest.json", "manifest.json.tmp"}
+    for file in files:
+        name = naming.sanitize(file.name).lower()
+        reserved.add(name + ".part")
+        reserved.add(name + META_SUFFIX)
+    return reserved
+
+
+def _already_there(final: Path, name: str, file: File, opts: Options) -> bool | None:
+    """Whether an existing file may stand in for this one.
+
+    A checksum match is proof. Without a checksum, a size match only means the
+    bytes *could* be the same, so one more thing must tie the file to this URL:
+    an explicit ``-o`` (the user chose the directory), a manifest in it that
+    recorded the same URL, or nothing else at all.
+    """
+    if opts.force or not final.exists():
+        return None
+    verdict = verify.matches(final, file.checksum)
+    if verdict is not None:
+        return verdict
+    if file.size is not None and final.stat().st_size != file.size:
+        return False
+    if opts.explicit_out:
+        return True
+    return opts.trusted.get(name) == file.url
 
 
 def fetch_file(client: Client, file: File, opts: Options, taken: set[str]) -> Result:
@@ -372,18 +450,15 @@ def fetch_file(client: Client, file: File, opts: Options, taken: set[str]) -> Re
     part = opts.out / (name + ".part")
     meta_path = opts.out / (name + META_SUFFIX)
 
-    if final.exists():
-        verdict = verify.matches(final, file.checksum)
-        sized_ok = file.size is None or final.stat().st_size == file.size
-        if verdict is True or (verdict is None and sized_ok):
-            return Result(
-                file=file,
-                state="skipped",
-                path=str(final),
-                bytes=final.stat().st_size,
-                verified=verdict,
-                name=name,
-            )
+    if _already_there(final, name, file, opts):
+        return Result(
+            file=file,
+            state="skipped",
+            path=str(final),
+            bytes=final.stat().st_size,
+            verified=verify.matches(final, file.checksum),
+            name=name,
+        )
 
     if opts.dry_run:
         return Result(file=file, state="skipped", path=str(final), verified=None, name=name)
@@ -427,59 +502,63 @@ def _attempt(
 ) -> Result:
     """Retry loop, verification and final rename for one file.
 
-    A 403 that looks like a WAF block page is retried a couple of times with
-    the partial file kept, then the file's fallback URLs are tried (a legacy
-    endpoint for the same bytes). Everything else terminal fails immediately.
+    A 403 that looks like a CDN block page is retried a couple of times with the
+    partial file kept. Everything else terminal fails immediately.
     """
     last: Exception | None = None
+    info: Transfer | None = None
     blocked = 0
-    candidates = [file.url, *file.fallbacks]
-    done = False
-    for index, url in enumerate(candidates):
-        source = file if url == file.url else replace(file, url=url)
-        for attempt in range(opts.retries + 1):
-            try:
-                _transfer(client, source, part, meta_path, opts)
-                done = True
-                break
-            except HttpError as exc:
-                last = exc
-                if exc.reason == "html-page":
-                    # Markup is not the file, so it must not be resumed onto.
-                    _drop(part, meta_path)
-                if exc.reason == "max-size":
-                    # Do not leave an over-limit part for the next run to
-                    # resume straight back into the same wall.
-                    _drop(part, meta_path)
-                    return Result(file=file, state="failed", error=str(exc))
-                if exc.status == 403 and exc.transient and blocked < client.block_retries:
-                    blocked += 1
-                elif exc.status in (401, 403, 404, 410):
-                    break  # terminal for this URL; a fallback may still work
-            except (*HTTP_EXC, OSError, ConnectionError, ValueError) as exc:
-                # ValueError: the response was closed under us by an interrupt.
-                last = exc
-            if _STOP.is_set():
-                return Result(file=file, state="failed", error="interrupted")
-            if attempt < opts.retries:
-                time.sleep(min(2**attempt, 10) * (0.7 + random.random() * 0.6))
-                resumed_from = part.stat().st_size if part.exists() else 0
-        if done:
+    for attempt in range(opts.retries + 1):
+        try:
+            info = _transfer(client, file, part, meta_path, opts)
             break
-        if index < len(candidates) - 1:
-            _drop(part, meta_path)
-            resumed_from = 0
-            continue
+        except HttpError as exc:
+            last = exc
+            if exc.reason == "html-page":
+                # Markup is not the file, so it must not be resumed onto.
+                _drop(part, meta_path)
+            if exc.reason == "max-size":
+                # Do not leave an over-limit part for the next run to
+                # resume straight back into the same wall.
+                _drop(part, meta_path)
+                return Result(
+                    file=file,
+                    state="failed",
+                    error=str(exc),
+                    http_status=exc.status,
+                    retrieved_at=_now(),
+                )
+            if exc.status == 403 and exc.transient and blocked < client.block_retries:
+                blocked += 1
+            elif exc.status in (401, 403, 404, 410):
+                break  # terminal
+        except (*HTTP_EXC, OSError, ConnectionError, ValueError) as exc:
+            # ValueError: the response was closed under us by an interrupt.
+            last = exc
+        if _STOP.is_set():
+            return Result(file=file, state="failed", error="interrupted")
+        if attempt < opts.retries:
+            time.sleep(min(2**attempt, 10) * (0.7 + random.random() * 0.6))
+            resumed_from = part.stat().st_size if part.exists() else 0
+    else:
         return Result(
             file=file,
             state="failed",
             error=f"{last}{_hint(last)}",
             bytes=_kept_bytes(part),
             part=str(part) if _kept_bytes(part) else None,
+            http_status=getattr(last, "status", None),
+            retrieved_at=_now(),
         )
 
     if last is not None and not part.exists():
-        return Result(file=file, state="failed", error=str(last))
+        return Result(
+            file=file,
+            state="failed",
+            error=str(last),
+            http_status=getattr(last, "status", None),
+            retrieved_at=_now(),
+        )
 
     if file.size is not None and part.exists() and part.stat().st_size != file.size:
         return Result(
@@ -487,16 +566,24 @@ def _attempt(
             state="failed",
             error=f"size mismatch (want {file.size})",
             bytes=part.stat().st_size,
+            http_status=info.http_status if info else None,
+            retrieved_at=_now(),
         )
 
     verdict = verify.matches(part, file.checksum)
     if verdict is False:
         _drop(part, meta_path)
         try:
-            _transfer(client, file, part, meta_path, opts)
+            info = _transfer(client, file, part, meta_path, opts)
             verdict = verify.matches(part, file.checksum)
         except Exception as exc:  # noqa: BLE001
-            return Result(file=file, state="failed", error=f"re-download failed: {exc}{_hint(exc)}")
+            return Result(
+                file=file,
+                state="failed",
+                error=f"re-download failed: {exc}{_hint(exc)}",
+                http_status=getattr(exc, "status", None),
+                retrieved_at=_now(),
+            )
         if verdict is False:
             _drop(part, meta_path)
             # verified=False is what makes the mismatch legible downstream, not
@@ -512,6 +599,10 @@ def _attempt(
         bytes=final.stat().st_size,
         verified=verdict,
         resumed_from=resumed_from,
+        final_url=info.final_url if info else None,
+        etag=info.etag if info else None,
+        http_status=info.http_status if info else None,
+        retrieved_at=info.retrieved_at if info else _now(),
     )
 
 
@@ -533,6 +624,8 @@ def fetch_record(
 def _fetch_record(
     record: Record, opts: Options, client: Client, only: list[str] | None = None
 ) -> list[Result]:
+    if opts.out.exists() and not opts.out.is_dir():
+        raise TargetError(f"-o must be a directory, and {opts.out} is a file")
     opts.out.mkdir(parents=True, exist_ok=True)
     files = record.files
     if only:
@@ -549,8 +642,9 @@ def _fetch_record(
         check_total(record, opts.max_bytes)
     if not opts.dry_run:
         check_disk(files, opts.out)
+        opts.trusted = _trusted_urls(opts.out / "manifest.json")
 
-    taken: set[str] = set()
+    taken = _reserved(files)
     lock = threading.Lock()
     results: list[Result] = []
     opts.interrupted = False
@@ -565,6 +659,8 @@ def _fetch_record(
                 _STOP.set()
                 results.append(Result(file=file, state="failed", error="interrupted"))
                 break
+            except Exception as exc:  # noqa: BLE001 - one file must not end the batch
+                results.append(_crashed(file, exc))
             if opts.interrupted:
                 break
         return _in_record_order(results, record)
@@ -576,7 +672,11 @@ def _fetch_record(
             with lock:
                 futures[pool.submit(fetch_file, client, file, opts, taken)] = file
         for future in as_completed(futures):
-            results.append(future.result())
+            file = futures[future]
+            try:
+                results.append(future.result())
+            except Exception as exc:  # noqa: BLE001 - one worker must not end the batch
+                results.append(_crashed(file, exc))
     except KeyboardInterrupt:
         # Abort the reads that are blocked, then let the workers unwind: they
         # see the stop flag and keep their .part instead of retrying.
@@ -596,6 +696,16 @@ def _fetch_record(
     else:
         pool.shutdown(wait=True)
     return _in_record_order(results, record)
+
+
+def _crashed(file: File, exc: Exception) -> Result:
+    """An unexpected worker exception, as one failed row instead of a traceback."""
+    return Result(
+        file=file,
+        state="failed",
+        error=f"{type(exc).__name__}: {exc}",
+        retrieved_at=_now(),
+    )
 
 
 def _in_record_order(results: list[Result], record: Record) -> list[Result]:

@@ -7,15 +7,20 @@ adapters. Only idempotent methods are retried.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import email.utils
+import hashlib
 import json
 import random
+import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from http.client import HTTPException
 
 from . import consts, verify
 from .errors import HttpError
@@ -28,12 +33,11 @@ SNIPPET = 200
 
 
 def is_block_page(detail: str, content_type: str | None) -> bool:
-    """Tell a WAF/load-balancer 403 apart from the API's own permission 403.
+    """Tell a WAF/load-balancer 403 apart from the application's own 403.
 
     Block pages are HTML or empty (AWS ELB, Cloudflare and friends all ship
-    one — see ``tests/fixtures/figshare_403_block.html``); a repository's real
-    permission error is JSON or plain text from the application itself. Both
-    ``api.figshare.com`` endpoints answer the HTML one intermittently, and it
+    one — see ``tests/fixtures/figshare_403_block.html``); a real permission
+    error is JSON or plain text from the application itself. A block page
     clears within a retry or two, so it must not be terminal.
 
     An empty body counts as a block page: retrying costs one request, while
@@ -56,14 +60,16 @@ def _blocked_detail(detail: str, retries: int | None) -> str:
 
 
 class RedirectPolicy(urllib.request.HTTPRedirectHandler):
-    """Keep a bearer token on its own origin, and note a downgrade to http.
+    """Keep credentials on their own origin, and off a plain-http hop.
 
     urllib copies every header onto the redirect, so a token issued for Zenodo
-    would travel to whatever host it points at -- and to a plain-http URL if it
-    redirects that way.
+    would travel to whatever host it points at -- and across the wire in clear
+    if the hop is ``https`` -> ``http``. ``--allow-http`` keeps the header on
+    such a hop for mirrors that need it.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, allow_http: bool = False) -> None:
+        self.allow_http = allow_http
         self.downgrades: list[tuple[str, str]] = []
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ANN201
@@ -73,11 +79,32 @@ class RedirectPolicy(urllib.request.HTTPRedirectHandler):
         before = urllib.parse.urlsplit(req.full_url)
         after = urllib.parse.urlsplit(new.full_url)
         if (before.hostname, before.port) != (after.hostname, after.port):
-            # A different origin has no business seeing this token.
-            new.remove_header("Authorization")
+            # A different origin has no business seeing the credentials.
+            for header in ("Authorization", "Cookie", "Proxy-Authorization"):
+                _drop_header(new, header)
         if after.scheme == "http" and before.scheme == "https":
             self.downgrades.append((req.full_url, new.full_url))
+            if self.allow_http:
+                note = "credentials kept (--allow-http)"
+            else:
+                _drop_header(new, "Authorization")
+                note = "credentials dropped (use --allow-http to keep them)"
+            print(
+                f"acadfetch: https -> http at {after.hostname}; {note}",
+                file=sys.stderr,
+            )
         return new
+
+
+def _drop_header(req, name: str) -> None:  # noqa: ANN001
+    """Delete a header whatever case it was stored under.
+
+    ``Request.add_header`` capitalises only the first letter, so
+    ``remove_header("Proxy-Authorization")`` misses ``Proxy-authorization``.
+    """
+    for store in (req.headers, req.unredirected_hdrs):
+        for key in [k for k in store if k.lower() == name.lower()]:
+            del store[key]
 
 
 def _carries_its_own_auth(url: str) -> bool:
@@ -115,6 +142,7 @@ class Client:
         headers: Mapping[str, str] | None = None,
         auth: Mapping[str, Mapping[str, str]] | None = None,
         block_retries: int = consts.WAF_403_RETRIES,
+        allow_http: bool = False,
     ) -> None:
         self.bucket = TokenBucket(rate)
         self.retries = max(0, retries)
@@ -125,10 +153,10 @@ class Client:
         self.block_retries = max(0, block_retries)
         self.headers = dict(headers or {})
         # Per-source credentials. The registry sets ``source`` before dispatch
-        # so a Zenodo token is never sent to figshare.
+        # so a Zenodo token is never sent to another source's host.
         self.auth = {k: dict(v) for k, v in (auth or {}).items()}
         self.source: str | None = None
-        self.redirects = RedirectPolicy()
+        self.redirects = RedirectPolicy(allow_http=allow_http)
         self.opener = urllib.request.build_opener(self.redirects)
 
     # -- internals ---------------------------------------------------------
@@ -199,12 +227,22 @@ class Client:
                     ) from exc
                 else:
                     waf += 1
+            except HttpError as exc:
+                # Raised by a caller-supplied fn, e.g. a body that stopped
+                # short. Only the transient ones are worth another request.
+                if not exc.transient:
+                    raise
+                last = exc
+                last_detail = str(exc)
+                last_blocked = False
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 last = exc
                 last_detail = str(exc)
                 last_blocked = False
             if attempt < budget - 1:
                 self._sleep(attempt, retry_after)
+        if isinstance(last, HttpError):
+            raise last
         if isinstance(last, urllib.error.HTTPError):
             detail = (
                 _blocked_detail(last_detail, waf if budget > 1 else None)
@@ -224,8 +262,18 @@ class Client:
         return self._with_retries(url, self._open, headers, attempts=attempts)
 
     def get_json(self, url: str, headers: Mapping[str, str] | None = None) -> dict:
-        with self.open(url, headers) as resp:
-            raw = resp.read(MAX_JSON)
+        def _read(req):  # noqa: ANN001
+            with self._open(req) as resp:
+                try:
+                    return resp.read(MAX_JSON)
+                except (HTTPException, TimeoutError, OSError) as exc:
+                    # IncompleteRead is an HTTPException, not an OSError: left
+                    # alone it escaped the retry loop as a traceback.
+                    raise HttpError(
+                        0, url, f"could not read the response body: {exc}", transient=True
+                    ) from exc
+
+        raw = self._with_retries(url, _read, headers)
         try:
             return json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -255,13 +303,53 @@ def _snippet(exc: urllib.error.HTTPError) -> str:
     return text[:SNIPPET]
 
 
-def checksum_of(headers: Mapping[str, str]) -> str | None:
-    """Prefer a strong hash header over nothing (for direct URLs)."""
-    for key in ("X-Checksum-Sha256", "X-Amz-Meta-Sha256", "Content-MD5"):
-        if key in headers:
-            algo = "sha256" if "sha256" in key.lower() else "md5"
-            return f"{algo}:{headers[key]}"
+def header_value(headers: Mapping[str, str], name: str) -> str | None:
+    """Case-insensitive header lookup; HTTP names are not case sensitive."""
+    wanted = name.lower()
+    for key, value in headers.items():
+        if key.lower() == wanted:
+            return value
     return None
 
 
-__all__ = ["Client", "parse_retry_after", "checksum_of", "verify"]
+def _as_hex(value: str | None, algo: str) -> str | None:
+    """Accept a header checksum as hex or as base64, return ``algo:hex``.
+
+    ``Content-MD5`` and ``x-amz-checksum-sha256`` are base64 by standard, while
+    some CDNs put bare hex in ``X-Checksum-Sha256``. A wrong guess here means a
+    false MISMATCH, so both forms are tried and anything else is ignored.
+    """
+    if not value:
+        return None
+    text = value.strip()
+    parsed = verify.parse(f"{algo}:{text}")
+    if parsed is not None:
+        return f"{parsed[0]}:{parsed[1]}"
+    try:
+        raw = base64.b64decode(text, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if len(raw) != hashlib.new(algo).digest_size:
+        return None
+    return f"{algo}:{raw.hex()}"
+
+
+def checksum_of(headers: Mapping[str, str]) -> str | None:
+    """The strongest checksum a response header carries, if any.
+
+    Prefer SHA-256 over MD5. For a direct URL the server is the only party
+    that can vouch for the bytes, so a strong one is worth waiting for.
+    """
+    for name, algo in (
+        ("X-Checksum-Sha256", "sha256"),
+        ("X-Amz-Meta-Sha256", "sha256"),
+        ("X-Amz-Checksum-Sha256", "sha256"),
+        ("Content-MD5", "md5"),
+    ):
+        found = _as_hex(header_value(headers, name), algo)
+        if found:
+            return found
+    return None
+
+
+__all__ = ["Client", "parse_retry_after", "checksum_of", "header_value", "verify"]

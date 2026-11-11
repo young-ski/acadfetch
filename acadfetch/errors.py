@@ -37,7 +37,17 @@ class HttpError(AcFError):
         #: Machine-readable cause for callers that must branch on it, e.g.
         #: ``html-page``: the body is a block/login page, not the file asked for.
         self.reason = reason
-        super().__init__(f"HTTP {status} for {url}{': ' + detail if detail else ''}")
+        if status:
+            text = f"HTTP {status} for {url}{': ' + detail if detail else ''}"
+        elif reason == "max-size":
+            text = detail  # a local refusal, not an answer
+        else:
+            text = f"HTTP 0 for {url}{': ' + detail if detail else ''}"
+        super().__init__(text)
+
+
+class LocalError(AcFError):
+    """A refusal decided locally, where no HTTP status exists (disk, -o)."""
 
 
 class VerifyError(AcFError):

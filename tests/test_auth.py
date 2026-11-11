@@ -14,8 +14,8 @@ def test_load_empty():
 
 
 def test_load_reads_known_variables():
-    tokens = auth.load({"ZENODO_TOKEN": TOKEN, "FIGSHARE_TOKEN": "fig-0000-abcd"})
-    assert set(tokens) == {"zenodo", "figshare"}
+    tokens = auth.load({"ZENODO_TOKEN": TOKEN})
+    assert set(tokens) == {"zenodo"}
     assert tokens["zenodo"].env == "ZENODO_TOKEN"
 
 

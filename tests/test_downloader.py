@@ -250,42 +250,6 @@ def test_block_retries_zero_also_stops_the_transfer_retries(server, tmp_path):
     assert server.cfg["hits"]["/a.bin"] == 1
 
 
-def test_fallback_url_is_used_when_the_first_is_refused(server, tmp_path):
-    payload = b"fallback bytes" * 40
-    server.cfg["files"]["/alt.bin"] = payload
-    server.cfg["forbidden"].add("/a.bin")
-    f = File(
-        url=server.base + "/a.bin",
-        name="a.bin",
-        size=len(payload),
-        checksum="sha256:" + hashlib.sha256(payload).hexdigest(),
-        fallbacks=[server.base + "/alt.bin"],
-    )
-    res = downloader.fetch_file(Client(rate=1000, retries=1), f, opts(tmp_path), set())
-    assert res.state == "downloaded"
-    assert res.verified is True
-    assert (tmp_path / "a.bin").read_bytes() == payload
-    assert server.cfg["hits"]["/alt.bin"] == 1
-
-
-def test_fallback_restarts_instead_of_appending(server, tmp_path):
-    payload = b"F" * 400
-    server.cfg["files"]["/alt.bin"] = payload
-    server.cfg["forbidden"].add("/a.bin")
-    (tmp_path / "a.bin.part").write_bytes(b"stale")
-    (tmp_path / "a.bin.part.meta.json").write_text(f'{{"url": "{server.base}/a.bin"}}', "utf-8")
-    f = File(
-        url=server.base + "/a.bin",
-        name="a.bin",
-        size=len(payload),
-        checksum="sha256:" + hashlib.sha256(payload).hexdigest(),
-        fallbacks=[server.base + "/alt.bin"],
-    )
-    res = downloader.fetch_file(Client(rate=1000, retries=1), f, opts(tmp_path), set())
-    assert res.state == "downloaded"
-    assert (tmp_path / "a.bin").read_bytes() == payload
-
-
 # -- a real file against the checksum the repository published ------------
 
 
@@ -601,3 +565,26 @@ def test_a_real_sigint_stops_the_transfer_and_keeps_the_part(server, tmp_path):
     assert part.read_bytes()[:1] == b"z"
     assert part.stat().st_size > 0, "the bytes already read must survive"
     assert not (tmp_path / "a.bin").exists()
+
+
+def test_a_transfer_records_where_and_when(server, tmp_path):
+    """Provenance: the final URL, the validator, the status and the moment."""
+    payload = b"provenance" * 50
+    f = make_file(server, payload=payload, checksum="sha256:" + hashlib.sha256(payload).hexdigest())
+    res = downloader.fetch_file(Client(rate=1000, retries=1), f, opts(tmp_path), set())
+
+    assert res.state == "downloaded"
+    assert res.final_url == f.url
+    assert res.etag == '"v1"'
+    assert res.http_status == 200
+    assert res.retrieved_at and res.retrieved_at.endswith("+00:00")
+
+
+def test_a_failed_transfer_records_the_status(server, tmp_path):
+    f = make_file(server, payload=b"x" * 10)
+    server.cfg["always_500"].add("/a.bin")
+    res = downloader.fetch_file(Client(rate=1000, retries=0), f, opts(tmp_path, retries=0), set())
+
+    assert res.state == "failed"
+    assert res.http_status == 500
+    assert res.retrieved_at
