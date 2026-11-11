@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 import unicodedata
 from urllib.parse import unquote, urlsplit
 
@@ -74,8 +75,18 @@ def sanitize(name: str, fallback: str = "file") -> str:
     return out or fallback
 
 
+#: The check-then-add below is one step only if callers cannot interleave.
+#: Workers share one ``taken`` set, so the window is real and small.
+_LOCK = threading.Lock()
+
+
 def unique(name: str, taken: set[str]) -> str:
     """Return a name not already in ``taken`` (case-insensitively)."""
+    with _LOCK:
+        return _unique_locked(name, taken)
+
+
+def _unique_locked(name: str, taken: set[str]) -> str:
     if name.lower() not in taken:
         taken.add(name.lower())
         return name
