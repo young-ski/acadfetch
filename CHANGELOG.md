@@ -6,6 +6,12 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
+### Added
+
+- `--verbose` / `ACADFETCH_DEBUG=1`: request, retry and traceback tracing on
+  stderr, with credential headers and presigned query parameters masked. stdout,
+  `--json` and the exit code are untouched; a log line can never fail a run.
+
 ## [0.4.0] - 2026-11-11
 
 ### Added

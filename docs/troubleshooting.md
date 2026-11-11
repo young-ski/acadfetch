@@ -29,6 +29,12 @@ If the public resolver answers and yours does not, either fix DNS
 (`%WINDIR%\System32\drivers\etc\hosts` on Windows) for the length of the job and
 remove it afterwards -- a pinned address outlives a CDN change.
 
+## Nothing obvious, and the one-line error is not enough
+
+Re-run with `--verbose` (or `ACADFETCH_DEBUG=1`). It prints every request,
+retry decision and the traceback to stderr; tokens stay masked. Paste the
+trace, not a screenshot.
+
 ## A proxy, or TLS interception
 
 Environment proxies are used automatically. When the proxy is only known per

@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from http.client import HTTPException
 from pathlib import Path
 
-from . import atomic, naming, verify
+from . import atomic, debug, naming, verify
 from .client import Client
 from .consts import CHUNK
 from .errors import HttpError, LocalError, PartialError, TargetError
@@ -700,6 +700,7 @@ def _fetch_record(
 
 def _crashed(file: File, exc: Exception) -> Result:
     """An unexpected worker exception, as one failed row instead of a traceback."""
+    debug.log_exception(exc)
     return Result(
         file=file,
         state="failed",
