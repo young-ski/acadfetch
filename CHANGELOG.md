@@ -6,6 +6,17 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-11
+
+### Fixed
+
+- `naming.unique` was a check-then-add on a set shared by every worker, so two
+  transfers could receive the same name, one renamed over the other, and the
+  manifest kept two rows with one name and a lost file. On the free-threaded
+  3.15.1 build that happened in 36 of 500 stress rounds; with the allocation
+  locked, 0 of 500. Free-threaded 3.15.1 now runs the suite, `-W error` and a
+  `-j 8` end-to-end stress green; CI still does not cover that build.
+
 ## [0.2.0] - 2026-11-10
 
 ### Changed
@@ -69,13 +80,6 @@ pre-1.0: a minor bump may break a flag.
   `--record-full-url` keeps the original string.
 
 ### Fixed
-
-- `naming.unique` was a check-then-add on a set shared by every worker, so two
-  transfers could receive the same name, one renamed over the other, and the
-  manifest kept two rows with one name and a lost file. On the free-threaded
-  3.15.1 build that happened in 36 of 500 stress rounds; with the allocation
-  locked, 0 of 500. Free-threaded 3.15.1 now runs the suite, `-W error` and a
-  `-j 8` end-to-end stress green; CI still does not cover that build.
 
 - One unexpected worker exception (a directory sitting on a final name, a
   permission error on rename) ended the whole batch, printed a traceback and
