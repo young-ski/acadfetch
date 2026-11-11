@@ -6,6 +6,8 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-11
+
 ### Added
 
 - `--verbose` / `ACADFETCH_DEBUG=1`: request, retry and traceback tracing on
