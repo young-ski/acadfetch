@@ -31,7 +31,7 @@ jobs:
     timeout-minutes: 10
     if: startsWith(github.ref, 'refs/tags/')
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: The tag is on main
@@ -47,11 +47,13 @@ jobs:
 
   publish:
     needs: [gates, guard]
-    # A skipped `needs` would otherwise skip this too, which would make
-    # workflow_dispatch useless.
+    # A skipped `needs` would otherwise skip this too (that is what makes the
+    # tag-only ref check below, rather than the guard, the decision).
+    # Dispatch counts only when it is dispatched at a tag; a branch dispatch
+    # used to publish a version the guard had never looked at.
     if: >-
       always() && needs.gates.result == 'success'
-      && (needs.guard.result == 'success' || needs.guard.result == 'skipped')
+      && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Must match the environment name registered on PyPI's trusted publisher.
@@ -62,7 +64,7 @@ jobs:
       id-token: write # the OIDC token PyPI accepts
       attestations: write # the provenance record below
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
           path: dist/
@@ -71,12 +73,12 @@ jobs:
         run: ls -l dist/ && sha256sum dist/*
 
       - name: Attach a provenance record to the artifacts
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: "dist/*"
 
       # Pinned to a tag rather than `@release/v1`, which is a moving branch.
-      - uses: pypa/gh-action-pypi-publish@v1.14.3
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           skip-existing: false
 
@@ -87,7 +89,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - name: Install the published version, from PyPI
