@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import auth, consts, manifest, naming, urls, verify
+from . import remote as remote_check
 from .client import Client
 from .downloader import Options, check_disk, check_total, fetch_record, human
 from .errors import AcFError, PartialError, TargetError
@@ -440,7 +441,20 @@ def cmd_verify(args: argparse.Namespace) -> int:
     if manifest.peek_schema(manifest_path) == 1:
         print(manifest.SCHEMA_1_NOTE, file=sys.stderr)
     doc["root"] = str(root)
-    rows = manifest.verify_manifest(manifest_path, root, allow_escape=args.allow_escape)
+    data = manifest.load(manifest_path)
+    rows = manifest.verify_manifest(manifest_path, root, allow_escape=args.allow_escape, data=data)
+    remote: dict[str, tuple[str, str]] = {}
+    if args.against_remote:
+        published_now, reason = remote_check.published(_client(args), data)
+        entries = [e for e in data.get("files") or [] if isinstance(e, dict)]
+        # verify_manifest walks the same list in order; the rows do not carry
+        # the URL or checksum themselves.
+        remote = {
+            row["name"]: remote_check.judge(
+                None if not published_now and reason else published_now, entry, reason
+            )
+            for row, entry in zip(rows, entries, strict=False)
+        }
     skipped = sum(1 for row in rows if row["status"] == "skipped")
     hard = sum(1 for row in rows if row["status"] not in ("ok", "skipped"))
     # --require-all turns "you never asked for it" into a failure; the plain
@@ -450,7 +464,11 @@ def cmd_verify(args: argparse.Namespace) -> int:
     ok = len(rows) - hard - skipped
     if not args.json:
         for row in rows:
-            print(f"{row['status']:>9} {row['name']}")
+            status, detail = remote.get(row["name"], ("", ""))
+            tail = f"  remote: {status}" if status else ""
+            if detail:
+                tail += f" ({detail})"
+            print(f"{row['status']:>9} {row['name']}{tail}")
         if rows:
             print()
             tally = f"{ok}/{len(rows)} ok"
@@ -459,8 +477,46 @@ def cmd_verify(args: argparse.Namespace) -> int:
             print(tally)
     if not args.allow_escape and any(row["status"] == "escaped" for row in rows):
         print(f"some names leave {root} - --allow-escape follows them", file=sys.stderr)
+    remote_bad = 0
+    if remote:
+        total = remote_check.counts([{"remote": status} for status, _ in remote.values()])
+        if total[remote_check.MISMATCH]:
+            remote_bad = total[remote_check.MISMATCH]
+        if args.require_remote and total[remote_check.UNAVAILABLE]:
+            remote_bad += total[remote_check.UNAVAILABLE]
+        bad += remote_bad
+        data["remote_checked_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        try:
+            manifest.write(manifest_path, data)
+        except OSError as exc:
+            print(f"acadfetch: could not record remote_checked_at: {exc}", file=sys.stderr)
+        doc["remote_checked_at"] = data["remote_checked_at"]
+        doc["remote"] = total
+        if total[remote_check.MISMATCH]:
+            print(
+                f"{total[remote_check.MISMATCH]} file(s) no longer match what the source "
+                f"publishes now",
+                file=sys.stderr,
+            )
+        if total[remote_check.UNAVAILABLE] and not args.require_remote:
+            print(
+                f"{total[remote_check.UNAVAILABLE]} file(s) could not be re-checked; "
+                f"--require-remote counts them",
+                file=sys.stderr,
+            )
     doc["rows"] = [
-        {k: row[k] for k in ("name", "status", "state", "sha256", "expected", "actual") if k in row}
+        {
+            **{
+                k: row[k]
+                for k in ("name", "status", "state", "sha256", "expected", "actual")
+                if k in row
+            },
+            **(
+                {"remote": remote[row["name"]][0], "remote_detail": remote[row["name"]][1]}
+                if row["name"] in remote
+                else {}
+            ),
+        }
         for row in rows
     ]
     doc["summary"] = {
@@ -648,10 +704,21 @@ def build_parser() -> argparse.ArgumentParser:
         "run) as a failure instead of skipping it",
     )
     ver.add_argument(
+        "--against-remote",
+        action="store_true",
+        help="ask the source again and compare what it publishes now (network)",
+    )
+    ver.add_argument(
+        "--require-remote",
+        action="store_true",
+        help="count a file that could not be re-checked as a failure",
+    )
+    ver.add_argument(
         "--json",
         action="store_true",
         help="print one JSON report to stdout instead of rows",
     )
+    network_flags(ver)
     ver.set_defaults(func=cmd_verify)
 
     src = sub.add_parser("sources", help="list supported sources")
