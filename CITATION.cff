@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use acadfetch in work you publish, please cite it as below."
+type: software
+title: "acadfetch"
+abstract: "Resumable, rate-limited, checksum-verified bulk downloads from academic data repositories, with a reproducibility manifest."
+authors:
+  - name: "young-ski"
+repository-code: "https://github.com/young-ski/acadfetch"
+url: "https://github.com/young-ski/acadfetch"
+license: MIT
+keywords:
+  - reproducibility
+  - zenodo
+  - arxiv
+  - doi
+  - download

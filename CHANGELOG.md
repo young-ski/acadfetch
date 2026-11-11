@@ -8,6 +8,13 @@ pre-1.0: a minor bump may break a flag.
 
 ### Added
 
+- `--cite` and `CITATION.cff`: how to cite the tool, separate from how to cite
+  the data it fetched.
+- `docs/demo.md` (a real 30-second transcript) and `docs/integrations.md`
+  (aria2, Make, CI, Snakemake).
+
+### Added
+
 - `--glob PATTERN…` selects files by shell pattern and combines with `--only`.
 - `-w/--urls PATH` writes an aria2-compatible list (URL, `out=`, `dir=`) instead
   of downloading; `-` is stdout and the header moves to stderr, so it can be

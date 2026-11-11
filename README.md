@@ -292,6 +292,10 @@ honest way to test this code path.
 
 ## Getting involved
 
+A [30-second tour](docs/demo.md) shows the whole loop, and
+[docs/integrations.md](docs/integrations.md) has Make, CI, aria2 and Snakemake
+recipes.
+
 A nightly job downloads three fixed public records and verifies them, so a
 rotted adapter opens an issue before a user reports one. It never blocks a
 merge; the next good night closes the issue.
@@ -330,6 +334,12 @@ acadfetch verify ./data/manifest.json
 ```
 
 MIT。
+
+## Citing
+
+`acadfetch --cite` prints how to cite the tool; the machine-readable form is
+[`CITATION.cff`](CITATION.cff). For the data, cite the repository record — the
+manifest is the part that lets a reader re-check it.
 
 ## Audit trail
 
