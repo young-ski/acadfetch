@@ -6,6 +6,13 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
+### Added
+
+- `--glob PATTERN…` selects files by shell pattern and combines with `--only`.
+- `-w/--urls PATH` writes an aria2-compatible list (URL, `out=`, `dir=`) instead
+  of downloading; `-` is stdout and the header moves to stderr, so it can be
+  piped. Nothing is fetched and no manifest is written.
+
 ## [0.5.0] - 2026-11-11
 
 ### Added
