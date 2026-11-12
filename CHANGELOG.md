@@ -10,6 +10,12 @@ pre-1.0: a minor bump may break a flag.
 
 ### Fixed
 
+- Two runs into one output directory wrote the same `.part` and the survivor was
+  a file neither had finished. The directory is locked with `.acadfetch.lock`
+  (owner pid, checked non-intrusively); a live owner refuses the second run with
+  the pid and the file to delete, a dead or unreadable owner is taken over, and
+  the lock is released on every exit path.
+
 - A `416` on a kept `.part` was always read as ``already complete``, so a part
   left by an older object was renamed into place with nothing checked when the
   file had no size or checksum. The answer now needs evidence: a matching
