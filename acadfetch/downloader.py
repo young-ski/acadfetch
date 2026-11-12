@@ -240,6 +240,46 @@ def _chunks(resp, idle_timeout: float, url: str):  # noqa: ANN001, ANN202
         yield chunk
 
 
+def _star_total(content_range: str | None) -> int | None:
+    """``bytes */N`` → N, for the 416 that carries it."""
+    if not content_range:
+        return None
+    _, _, value = content_range.strip().partition("*/")
+    try:
+        return int(value.strip())
+    except ValueError:
+        return None
+
+
+def _restart_or_finish(
+    file: File, part: Path, meta_path: Path, have: int, exc: HttpError
+) -> Transfer:
+    """What a 416 means: the part is the file, or it is stale and must go.
+
+    "Already complete" used to be assumed whenever the part existed, so a stale
+    part (a different, older object) was renamed into place with nothing
+    checked. A matching checksum is proof; otherwise the size the server
+    reports for the whole object has to equal the part exactly.
+    """
+    parsed = verify.parse(file.checksum)
+    digests: dict[str, str] | None = None
+    if parsed is not None:
+        digests = verify.hashes(part, {"sha256", parsed[0]})
+        if digests[parsed[0]] == parsed[1]:
+            return Transfer(0, digests=digests)
+    total = _star_total(exc.content_range)
+    if total is not None and total == have:
+        if digests is None:
+            digests = verify.hashes(part, {"sha256"})
+        return Transfer(0, digests=digests)
+    _drop(part, meta_path)
+    if total is None:
+        raised, compared = "416 without a size to compare against", "no evidence"
+    else:
+        raised, compared = f"server says {total} bytes", f"the .part has {have}"
+    raise HttpError(416, file.url, f"{raised}, {compared}; restarting", transient=True)
+
+
 def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Options) -> Transfer:
     """Move bytes into ``part``, resuming if possible. Returns what happened."""
     meta = _read_meta(meta_path) if part.exists() else {}
@@ -266,7 +306,7 @@ def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Opt
         resp = client.open(file.url, headers, attempts=1)
     except HttpError as exc:
         if exc.status == 416 and have:
-            return Transfer(0)  # already complete
+            return _restart_or_finish(file, part, meta_path, have, exc)
         raise
 
     with resp:

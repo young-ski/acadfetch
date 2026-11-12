@@ -55,7 +55,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if cfg["answers_416"] and self.headers.get("Range"):
             self.send_response(416)
-            self.send_header("Content-Range", f"bytes */{len(cfg['files'].get(path, b''))}")
+            if not cfg.get("416_omits_range"):
+                self.send_header("Content-Range", f"bytes */{len(cfg['files'].get(path, b''))}")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -147,6 +148,7 @@ def _new_server():
         "declares": {},
         "types": {},
         "answers_416": False,
+        "416_omits_range": False,
         "ranges": [],
         "stall_after": None,
         "stall_for": 2.0,

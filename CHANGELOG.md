@@ -81,6 +81,15 @@ pre-1.0: a minor bump may break a flag.
 
 ### Fixed
 
+- A `416` on a kept `.part` was always read as ``already complete``, so a part
+  left by an older object was renamed into place with nothing checked when the
+  file had no size or checksum. The answer now needs evidence: a matching
+  checksum, or a `Content-Range: bytes */N` equal to the part. Otherwise the
+  part is dropped and the file fetched again.
+- The Zenodo `is_latest` follow-the-latest branch is dormant (the API stopped
+  sending the field); a test pins both the follow and the kept target instead of
+  leaving it unexercised.
+
 - `naming.unique` was a check-then-add on a set shared by every worker, so two
   transfers could receive the same name, one renamed over the other, and the
   manifest kept two rows with one name and a lost file. On the free-threaded
