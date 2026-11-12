@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from http.client import HTTPException
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from . import atomic, debug, naming, verify
 from .client import Client
@@ -481,7 +481,10 @@ def _pid_alive(pid: int) -> bool:
     if os.name == "nt":
         import ctypes
 
-        kernel32 = ctypes.windll.kernel32
+        # The attribute does not exist off Windows, and both ruff and mypy
+        # check this file on Linux; a typed lookup keeps both quiet.
+        windll: Any = getattr(ctypes, "windll")  # noqa: B009
+        kernel32 = windll.kernel32
         handle = kernel32.OpenProcess(0x1000, False, pid)  # query limited info
         if not handle:
             return False
