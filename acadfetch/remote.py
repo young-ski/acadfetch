@@ -68,6 +68,11 @@ def judge(
     here, there = _normalise(local), _normalise(remote)
     if here is None or there is None:
         return NO_CHECKSUM, "a checksum is not parseable"
+    if here[0] != there[0]:
+        # Comparing an md5 with a sha256 proves nothing either way. Reporting a
+        # mismatch here would call a legitimate algorithm change tampering, and
+        # this status is the one that makes the whole check worth running.
+        return NO_CHECKSUM, f"the source publishes {there[0]} now, the row recorded {here[0]}"
     return (
         (MATCH, "") if here == there else (MISMATCH, f"published {there[0]}:{there[1][:12]}… now")
     )

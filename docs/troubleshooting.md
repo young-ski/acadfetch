@@ -120,8 +120,7 @@ shallower directory.
 
 ## A token is ignored, or a restricted record 403s
 
-Tokens are read from `ZENODO_TOKEN` / `FIGSHARE_TOKEN` only, and only sent to that
-repository's host. `--no-token` switches them off; `--header` overrides.
+Tokens are read from `ZENODO_TOKEN` only, and only sent to that repository's host. `--no-token` switches them off; `--header` overrides.
 `acadfetch fetch … -n` prints which token it picked up, last four characters
 only, so you can see whether the variable reached the process at all.
 

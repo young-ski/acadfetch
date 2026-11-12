@@ -36,7 +36,7 @@ lists gets a row, whether or not this run asked for it.
 | `size` | int \| null | Published size, when there is one. |
 | `checksum` | string \| null | `algo:hex`, as published. |
 | `checksum_source` | string \| null | `"cli"` for `--checksum`, `"header"` when the server sent one, `null` for a published checksum or none. |
-| `sha256` | string \| null | Hash of the bytes on disk, computed after the transfer. |
+| `sha256` | string \| null | Hash of the bytes on disk, computed while the transfer ran rather than by reading the finished file again. |
 | `bytes` | int | Bytes written by this run. |
 | `state` | string | See below. |
 | `selected` | bool | Whether this run asked for the file. |
@@ -93,11 +93,19 @@ asked.
 
 | `remote` | Meaning | Fails? |
 | --- | --- | --- |
-| `remote_match` | the source agrees | no |
-| `remote_mismatch` | the row and the source disagree | **yes, even if the local hash is `ok`** |
-| `remote_no_checksum` | nothing published, or nothing recorded | no |
-| `remote_unavailable` | could not ask (removed source, 404, network) | only with `--require-remote` |
+| `remote_match` | the source agrees, algorithm and digest | no |
+| `remote_mismatch` | the row and the source disagree in the same algorithm | **yes, even if the local hash is `ok`** |
+| `remote_no_checksum` | nothing published, nothing recorded, or published under a different algorithm | no |
+| `remote_unavailable` | could not ask: removed source, 404, network, or a URL that was redacted on the way in | only with `--require-remote` |
 
 A successful check writes `remote_checked_at`. `remote_no_checksum` and
 `remote_unavailable` are the honest answers — they are never reported as a
 match.
+
+A changed algorithm is **not** evidence of tampering: comparing an `md5` with a
+`sha256` proves nothing either way, so the row is reported `remote_no_checksum`
+with both algorithms in the detail. Failing there would accuse a legitimate
+change. Likewise a manifest written without `--record-full-url` has its
+credential parameters stripped, so such a URL cannot be resolved again; the
+command says so on stderr rather than reporting a silent wall of
+`remote_unavailable`.

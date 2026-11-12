@@ -5,9 +5,10 @@ name: CI
 on:
   push:
     branches: [main]
-    paths-ignore: ["**/*.md", "docs/**"]
   pull_request:
-    paths-ignore: ["**/*.md", "docs/**"]
+    # No `paths-ignore` for `**/*.md`: since tests/test_claims.py, the docs are a
+    # test input. Skipping CI exactly on the changes that can break that test is
+    # how it would go stale without anyone noticing.
 
 permissions:
   contents: read

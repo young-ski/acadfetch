@@ -369,6 +369,15 @@ def test_only_before_the_target_still_finds_it(monkeypatch, capsys):
     assert "would fetch f" in capsys.readouterr().out
 
 
+def test_a_dry_run_does_not_print_a_question_mark_as_a_size(monkeypatch, capsys):
+    """arXiv publishes no size, and "?" in that column reads like a defect."""
+    _stub_resolve(monkeypatch)
+    assert cli.main(["fetch", "zenodo:1", "-n"]) == 0
+    out = capsys.readouterr().out
+    assert "size not published" in out
+    assert "(?)" not in out
+
+
 def test_fetch_without_a_target_says_what_to_type(capsys):
     assert cli.main(["fetch"]) == 1
     assert "which record?" in capsys.readouterr().err

@@ -54,7 +54,11 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.15'
         run: python -m mypy
       - name: Test
-        run: pytest -q --cov=acadfetch --cov-fail-under=85
+        # Measured at 93% on Windows and Linux; 90 leaves room for the platform
+        # branches each one cannot see while still catching a gutted suite. The
+        # same number is in CONTRIBUTING.md and docs/releasing.md, and
+        # tests/test_claims.py fails if they ever disagree.
+        run: pytest -q --cov=acadfetch --cov-fail-under=90
       - name: Warnings are errors where they can be
         # pytest re-emits unraisable warnings under its own category, so the
         # narrow ResourceWarning filter never fires; -W error does.

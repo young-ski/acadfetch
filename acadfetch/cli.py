@@ -256,7 +256,7 @@ def _file_row(row, redact: bool = True) -> dict:  # noqa: ANN001
         "http_status": row.http_status,
         "final_url": hide(row.final_url) if row.final_url else None,
         "verified": row.verified,
-        "verified_reason": verify_reason(row.file.checksum, row.verified),
+        "verified_reason": verify_reason(row.file.checksum, row.verified, row.state),
         "resumed_from": row.resumed_from,
         "part": Path(row.part).name if row.part else None,
         "error": row.error,
@@ -427,7 +427,10 @@ def cmd_fetch(args: argparse.Namespace) -> int:
                 + ("" if disk["ok"] else "  NOT ENOUGH")
             )
         for file in chosen:
-            print(f"  would fetch {naming.sanitize(file.name)} ({human(file.size)})")
+            # "?" in a size column reads as a bug; arXiv genuinely publishes no
+            # size, so say that instead of printing a question mark.
+            size = human(file.size) if file.size is not None else "size not published"
+            print(f"  would fetch {naming.sanitize(file.name)} ({size})")
         return EXIT_OK
 
     try:
@@ -519,6 +522,16 @@ def cmd_verify(args: argparse.Namespace) -> int:
     rows = manifest.verify_manifest(manifest_path, root, allow_escape=args.allow_escape, data=data)
     remote: dict[str, tuple[str, str]] = {}
     if args.against_remote:
+        if data.get("url_redacted"):
+            # A presigned URL is stripped on the way into the manifest, so the
+            # recorded URL cannot be resolved again. Say why instead of leaving
+            # a page of remote_unavailable to be puzzled over.
+            print(
+                "note: this manifest had credential query parameters stripped, so a "
+                "row whose URL cannot be resolved again reports remote_unavailable "
+                "(--record-full-url keeps the original)",
+                file=sys.stderr,
+            )
         published_now, reason = remote_check.published(_client(args), data)
         entries = [e for e in data.get("files") or [] if isinstance(e, dict)]
         # verify_manifest walks the same list in order; the rows do not carry

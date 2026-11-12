@@ -153,9 +153,29 @@ def _kept_bytes(part: Path) -> int:
         return 0
 
 
-def _drop(*paths: Path) -> None:
+def _room_for(part: Path, need: int) -> bool:
+    """Whether keeping the old bytes while a restarting copy runs still fits."""
+    try:
+        return shutil.disk_usage(part.parent).free >= need
+    except OSError:
+        return False
+
+
+def _drop(*paths: Path) -> bool:
+    """Remove files, and say whether they are all gone.
+
+    ``atomic.unlink`` swallows a sharing violation on purpose: losing a race with
+    a reader is usually harmless, and a cleanup step must not become a new way to
+    fail. Where the deletion is load-bearing -- a mismatched part that must not
+    be resumed onto, a part that is already over ``--max-size`` -- the caller has
+    to know it did not happen, or the next attempt silently resumes onto bytes it
+    was told to forget.
+    """
+    kept = False
     for path in paths:
         atomic.unlink(path)
+        kept = kept or path.exists()
+    return not kept
 
 
 def _content_length(headers, url: str) -> int | None:
@@ -340,6 +360,17 @@ def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Opt
         else:
             mode, offset = "ab", have
 
+        # A 200 to a Range request means the server ignored it, so this attempt
+        # restarts from zero. The bytes already on disk are still the best copy
+        # of the file there is until a new one completes, so a restart is written
+        # beside them and swapped in only once it is whole: opening the part with
+        # "wb" threw away 6 MiB in order to save 1, which is the opposite of what
+        # "never throws away the bytes it already paid for" promises. Without
+        # room for both copies, the old behaviour returns.
+        sink, aside = part, None
+        if whole and have and _room_for(part, have):
+            aside = sink = part.with_name(part.name + ".new")
+
         # Hash while the bytes go by instead of reading the finished file again.
         # A resumed transfer has to be fed what is already on disk first.
         parsed = verify.parse(file.checksum)
@@ -352,58 +383,73 @@ def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Opt
                 for old in iter(lambda: existing.read(1 << 20), b""):
                     for hasher in hashers.values():
                         hasher.update(old)
-        _write_meta(
-            meta_path,
-            {
-                "url": file.url,
-                "etag": resp.headers.get("ETag"),
-                "last_modified": resp.headers.get("Last-Modified"),
-                "size": file.size,
-            },
-        )
-        if declared is not None and file.size is not None:
-            expected = file.size - offset
-            if declared != expected:
-                raise HttpError(
-                    0,
-                    file.url,
-                    f"Content-Length {declared} disagrees with the published size "
-                    f"({expected} bytes still expected)",
-                )
-        # Reads poll with a short socket timeout so an interrupt is noticed
-        # within a second instead of after the whole 60 s socket timeout, and
-        # so an idle connection fails on its own budget. Closing the response
-        # from another thread additionally kicks a read that is already
-        # blocked.
-        with _LIVE_LOCK:
-            _LIVE.add(resp)
         try:
-            with part.open(mode) as fh:
-                for chunk in _chunks(resp, client.timeout, file.url):
-                    fh.write(chunk)
-                    for hasher in hashers.values():
-                        hasher.update(chunk)
-                    written += len(chunk)
-                    if opts.progress:
-                        opts.progress.advance(len(chunk))
-                    if opts.max_bytes and offset + written > opts.max_bytes:
-                        raise HttpError(
-                            0,
-                            file.url,
-                            f"refused locally: over --max-size ({human(opts.max_bytes)})",
-                            reason="max-size",
-                        )
-                if opts.fsync:
-                    # The rename below is atomic, but only against crashes that
-                    # leave the page cache intact. This is what makes the bytes
-                    # survive a power cut before they get a name.
-                    fh.flush()
-                    os.fsync(fh.fileno())
-        finally:
+            _write_meta(
+                meta_path,
+                {
+                    "url": file.url,
+                    "etag": resp.headers.get("ETag"),
+                    "last_modified": resp.headers.get("Last-Modified"),
+                    "size": file.size,
+                },
+            )
+            if declared is not None and file.size is not None:
+                expected = file.size - offset
+                if declared != expected:
+                    raise HttpError(
+                        0,
+                        file.url,
+                        f"Content-Length {declared} disagrees with the published size "
+                        f"({expected} bytes still expected)",
+                    )
+            # Reads poll with a short socket timeout so an interrupt is noticed
+            # within a second instead of after the whole 60 s socket timeout, and
+            # so an idle connection fails on its own budget. Closing the response
+            # from another thread additionally kicks a read that is already
+            # blocked.
             with _LIVE_LOCK:
-                _LIVE.discard(resp)
-        if declared is not None and declared != written:
-            raise HttpError(0, file.url, f"read {written} bytes, response declared {declared}")
+                _LIVE.add(resp)
+            try:
+                with sink.open(mode) as fh:
+                    for chunk in _chunks(resp, client.timeout, file.url):
+                        fh.write(chunk)
+                        for hasher in hashers.values():
+                            hasher.update(chunk)
+                        written += len(chunk)
+                        if opts.progress:
+                            opts.progress.advance(len(chunk))
+                        if opts.max_bytes and offset + written > opts.max_bytes:
+                            raise HttpError(
+                                0,
+                                file.url,
+                                f"refused locally: over --max-size ({human(opts.max_bytes)})",
+                                reason="max-size",
+                            )
+                    if opts.fsync:
+                        # The rename below is atomic, but only against crashes that
+                        # leave the page cache intact. This is what makes the bytes
+                        # survive a power cut before they get a name.
+                        fh.flush()
+                        os.fsync(fh.fileno())
+            finally:
+                with _LIVE_LOCK:
+                    _LIVE.discard(resp)
+            if declared is not None and declared != written:
+                raise HttpError(0, file.url, f"read {written} bytes, response declared {declared}")
+            if aside is not None:
+                # A whole body, agreeing with the declared length: only now does
+                # the restart replace what was already there.
+                atomic.replace(sink, part)
+        except BaseException:
+            if aside is not None:
+                # Keep the bytes that were there, and the sidecar that described
+                # them rather than this attempt's validator.
+                atomic.unlink(aside)
+                if meta:
+                    _write_meta(meta_path, meta)
+                else:
+                    atomic.unlink(meta_path)
+            raise
         return Transfer(
             written=written,
             final_url=resp.geturl() or file.url,
@@ -560,6 +606,8 @@ def _reserved(files) -> set[str]:  # noqa: ANN001
     for file in files:
         name = naming.sanitize(file.name).lower()
         reserved.add(name + ".part")
+        # A restart beside a kept part (a server that ignored Range) writes here.
+        reserved.add(name + ".part.new")
         reserved.add(name + META_SUFFIX)
     return reserved
 
@@ -675,12 +723,19 @@ def _attempt(
                 _drop(part, meta_path)
             if exc.reason == "max-size":
                 # Do not leave an over-limit part for the next run to
-                # resume straight back into the same wall.
-                _drop(part, meta_path)
+                # resume straight back into the same wall. Saying so when the
+                # deletion fails is the difference between a rerun that works
+                # and one that fails the same way with no explanation.
+                kept = not _drop(part, meta_path)
                 return Result(
                     file=file,
                     state="failed",
-                    error=str(exc),
+                    error=str(exc)
+                    + (
+                        f" (the over-limit {part.name} could not be deleted; remove it by hand)"
+                        if kept
+                        else ""
+                    ),
                     http_status=exc.status,
                     retrieved_at=_now(),
                 )
@@ -695,7 +750,12 @@ def _attempt(
             return Result(file=file, state="failed", error="interrupted")
         if attempt < opts.retries:
             time.sleep(min(2**attempt, 10) * (0.7 + random.random() * 0.6))
-            resumed_from = part.stat().st_size if part.exists() else 0
+            # ``_transfer`` re-reads the part size itself, so the offset this
+            # attempt resumes from needs no bookkeeping here. ``resumed_from``
+            # is deliberately *not* updated: it answers "how much was on disk
+            # when this run started", which a retry does not change. Rewriting
+            # it made a fresh download report ``(resumed at 1.6 MiB)``. See
+            # docs/json-report.md.
     else:
         assert last is not None  # the loop only ends after a failure
         return Result(
@@ -712,7 +772,10 @@ def _attempt(
         return Result(
             file=file,
             state="failed",
-            error=str(last),
+            # A terminal 403 breaks out of the loop above, so it lands here
+            # rather than on the retry-exhausted path below. Without the hint
+            # that made it the one error a user could not act on.
+            error=f"{last}{_hint(last)}",
             http_status=getattr(last, "status", None),
             retrieved_at=_now(),
         )
@@ -729,7 +792,19 @@ def _attempt(
 
     verdict = _verdict(file, info.digests if info else None)
     if verdict is False:
-        _drop(part, meta_path)
+        if not _drop(part, meta_path):
+            # Re-downloading would splice onto the bytes just proven wrong.
+            return Result(
+                file=file,
+                state="failed",
+                error=(
+                    f"checksum mismatch, and the bad {part.name} could not be deleted; "
+                    f"close whatever is reading it and retry"
+                ),
+                verified=False,
+                bytes=_kept_bytes(part),
+                retrieved_at=_now(),
+            )
         try:
             info = _transfer(client, file, part, meta_path, opts)
             verdict = _verdict(file, info.digests if info else None)

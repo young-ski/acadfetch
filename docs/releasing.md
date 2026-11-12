@@ -25,7 +25,7 @@ Move the `[Unreleased]` entries under `## [x.y.z] - YYYY-MM-DD`. Leave an empty
 ```bash
 ruff check . && ruff format --check .
 python -m mypy
-pytest -q --cov=acadfetch --cov-fail-under=85
+pytest -q --cov=acadfetch --cov-fail-under=90
 python -X dev -W error -m pytest -q
 python -m build && python -m twine check dist/*
 ```
@@ -33,7 +33,7 @@ python -m build && python -m twine check dist/*
 ## 5. Tag on main, and push the tag alone
 
 `workflow_dispatch` also works, but only at a tag:
-`gh workflow run release.yml --ref v0.1.2`. Dispatched at a branch it runs the
+`gh workflow run release.yml --ref v0.7.0`. Dispatched at a branch it runs the
 gates and stops, because the tag guard has nothing to check.
 
 Actions in the workflows are pinned to commit SHAs with a `# vX.Y.Z` comment.
@@ -42,8 +42,8 @@ Dependabot bumps them; if you bump one by hand, resolve the tag to its commit
 
 ```bash
 git switch main && git pull
-git tag -a v0.1.2 -m "0.1.2"
-git push origin v0.1.2
+git tag -a v0.7.0 -m "0.7.0"
+git push origin v0.7.0
 ```
 
 The tag must point at a commit that is an ancestor of `main`, and the release

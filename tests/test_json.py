@@ -293,3 +293,22 @@ def test_every_report_field_is_in_the_contract(served, capsys, tmp_path):
         assert f"`{key}`" in docs, f"verify field {key!r} is undocumented"
     for value in ("escaped", "malformed", "remote_match", "remote_unavailable"):
         assert value in docs, f"{value!r} is undocumented"
+
+
+def test_the_report_and_the_manifest_agree_on_a_cause(served, capsys, tmp_path):
+    """One run, one vocabulary: a failed row must not carry two reasons.
+
+    These are two documents describing the same file, and a script may hold both.
+    ``verified_reason`` used to say ``transfer-failed`` in the manifest and
+    ``no-checksum-published`` in the report, which reads as two different bugs.
+    """
+    served.cfg["forbidden"].add("/a.bin")
+
+    code, out, _ = _run(capsys, "fetch", "zenodo:1", "--json", "-o", tmp_path)
+
+    assert code == cli.EXIT_PARTIAL
+    row = json.loads(out)["files"][0]
+    assert row["state"] == "failed"
+    written = json.loads((tmp_path / "manifest.json").read_text("utf-8"))
+    assert written["files"][0]["verified_reason"] == "transfer-failed"
+    assert row["verified_reason"] == written["files"][0]["verified_reason"]

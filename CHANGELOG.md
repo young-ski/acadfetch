@@ -4,7 +4,102 @@ Notable changes, in [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 form. This project follows [Semantic Versioning](https://semver.org/) and is
 pre-1.0: a minor bump may break a flag.
 
+
 ## [Unreleased]
+
+## [0.6.4] - 2026-11-12
+
+A batch of correctness and honesty fixes. Two of them cost a user real bytes or
+real trust; the rest are the drift that accumulates when a document and a parser
+are edited on different days.
+
+### Added
+
+- `tests/test_claims.py`: the user-facing documentation is now a test input, so a
+  doc that drifts from the code is a red build rather than a reader's bad
+  afternoon. It asserts that every `--flag` a documented command uses exists, that
+  every flag the parser accepts appears in the docs, that every `verified_reason`
+  and `state` the code can emit is in the reference tables, that the README's exit
+  codes equal the constants, that `SECURITY.md` names the current supported line,
+  and that the coverage floor is the same number in `gates.yml`,
+  `CONTRIBUTING.md` and `docs/releasing.md`.
+
+  Written first as a detector and run against the previous code, it found six
+  flags that existed only in `--help`: `--concurrency`, `--out` and `--quiet` were
+  documented in short form only, and `--manifest-out`, `--retries` and `--version`
+  were not documented at all.
+- `docs/README.md`: an index that separates what is written for a user from what is
+  written for a maintainer, and that labels the four process documents as history
+  rather than as current behaviour. A test fails when a document is added to
+  `docs/` and not indexed, because an index that is a partial list reads as the
+  whole set.
+
+### Changed
+
+- CI no longer skips markdown-only changes. The docs are a test input now, so
+  skipping the run exactly on the changes that can break them was the one way the
+  new guard would rot unnoticed.
+- The coverage floor is 90, up from 85. The suite measures 93% on Windows and
+  Linux; the three points of headroom cover the platform branches each one cannot
+  see.
+- The progress line is built for the terminal it is drawn on. It asks for the
+  column count instead of always assuming 120, and it counts CJK characters as two
+  columns. A line that wrapped made the carriage-return redraw clear only the last
+  visual row, so the line smeared across two rows on a narrow terminal.
+- The speed and ETA estimate is an exponential average with a five-second time
+  constant, instead of the difference between the first and last sample of a
+  four-second window. One bursty interval no longer re-anchors the whole estimate.
+- A dry run prints `size not published` where it used to print `(?)`. arXiv really
+  does publish no size, and a question mark in a size column reads as a defect
+  rather than as an absence.
+- `acadfetch sources`, the no-target hint, the README and the nightly smoke no
+  longer present a direct URL as unconditionally fetchable: figshare's CDN answers
+  403 with a WAF block page from some networks. The target is kept (it is a real
+  file, and `--checksum` verifies it), the claim is honest about the WAF, and the
+  nightly run distinguishes "a canary target is unreachable" from "our code
+  broke" instead of raising the same alarm for both.
+- `CONTRIBUTING.md` installs `mypy` alongside the other test tools, so the gate it
+  tells you to run can actually run.
+- `SECURITY.md` lists `0.6.x`, not `0.1.x`, as the supported line, and no longer
+  describes `verify --against-remote` as a roadmap item; it shipped in 0.3.0.
+- `docs/troubleshooting.md` no longer mentions `FIGSHARE_TOKEN`, removed in 0.2.0.
+- The 2026-11 planning document moved from the repository root to `docs/`.
+
+### Fixed
+
+- A server that answered a `Range` request with the whole object (200) used to be
+  handled by truncating the `.part` before the new body arrived, so a restart that
+  died early destroyed bytes that had already been paid for — 6 MiB kept became
+  1 MiB kept. The restart is now written beside the part and swapped in only once
+  a whole body has arrived and its length agrees; on any failure the old part and
+  its sidecar are left exactly as they were.
+- Two deletions whose absence changes behaviour were silently best-effort.
+  `atomic.unlink` swallows a sharing violation on purpose — losing a race with a
+  reader is normally harmless — but on a Windows box where the `.part` is held
+  open, a checksum mismatch went on to re-download *onto the bytes just proven
+  wrong*, and an over-limit part stayed behind for the next run to resume straight
+  back into the same wall. Both now report what happened and stop, and the mismatch
+  keeps `verified: false` so it stays legible downstream.
+- `verify --against-remote` reported `remote_mismatch` — a hard failure, even when
+  the local hashes were fine — for a row the source now publishes under a different
+  algorithm (`sha256` where the manifest recorded `md5`). Comparing two different
+  algorithms proves nothing, so it is reported `remote_no_checksum` with both
+  algorithm names in the detail. Calling a legitimate change tampering was the one
+  way this check could destroy its own credibility.
+- `resumed_from` (in `--json` and in the manifest) was overwritten on every retry
+  with that retry's offset, so a download that started from nothing could report
+  `(resumed at 1.6 MiB)`. It now means what `docs/json-report.md` always said:
+  bytes on disk when the run started.
+- A 403 that ended the retry loop terminally returned the bare HTTP error, which
+  skipped the "what to try next" hint the other failures carry — the one path a
+  user is most likely to hit on a blocked network. The hint is now attached.
+- `verified_reason` for a failed row said `transfer-failed` in `manifest.json` but
+  `no-checksum-published` in the `--json` report. Both now go through one
+  function, so the two documents describe the same run the same way.
+- A manifest written without `--record-full-url` has its credential query
+  parameters stripped, so such a URL cannot be resolved again. `--against-remote`
+  now says that on stderr instead of leaving a page of `remote_unavailable` to be
+  interpreted.
 
 ## [0.6.3] - 2026-11-12
 

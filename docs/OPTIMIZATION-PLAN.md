@@ -1,7 +1,7 @@
 # acadfetch 优化计划（联合大脑工作稿）
 
 > **历史稿（2026-11-09 基线 e891841），不要按它执行。** 已落地项：停顿毒化、失败保留 `.part`、schema 2、HTML 拒收、`--json`、跨主机剥 token、磁盘预检、发布门统一。
-> 当前执行计划见 [docs/plan-0.2.0.md](docs/plan-0.2.0.md)（决定已拍板：研究者可复现优先、schema 3、删除 Figshare）。
+> 当前执行计划见 [plan-0.2.0.md](plan-0.2.0.md)（决定已拍板：研究者可复现优先、schema 3、删除 Figshare）。
 
 > 基线：`main` @ e891841，v0.1.1。206–210 tests 全绿、coverage 89%、`ruff` 干净。
 > 标注：**事实**＝本轮实测或代码行；**假设**＝推断；**建议**＝待决策。
@@ -392,5 +392,5 @@ E4/E5 照此把 `--env-id` 换成 `E4-hotspot` / `E5-vpn`，多余参数不加�
 
 单环境绿 = 3 次 ≥2 次通过且 3 次 verify 全 ok。2 周出口 = **5 环境 ≥4 绿** + E2 的 2 s 停顿用例 100% 通过 + `.part` 保留率 100%。
 
-**E4/E5 逐步操作手册**: [docs/first-success-runbook.md](docs/first-success-runbook.md)
-**E5（VPN）单独一册**: [docs/e5-vpn-runbook.md](docs/e5-vpn-runbook.md)
+**E4/E5 逐步操作手册**: [first-success-runbook.md](first-success-runbook.md)
+**E5（VPN）单独一册**: [e5-vpn-runbook.md](e5-vpn-runbook.md)

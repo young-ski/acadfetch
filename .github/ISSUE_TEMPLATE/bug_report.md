@@ -34,7 +34,7 @@ If a file is wrong, this is the important part:
 
 **Network path**
 
-<!-- any proxy, VPN, region, or a WAF answering 403. figshare's API blocks some
-     networks outright; say if you are behind one -->
+<!-- any proxy, VPN, region, or a WAF answering 403. Some repository CDNs block a
+     network outright; say if you are behind one -->
 
 **Anything else**

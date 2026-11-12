@@ -50,8 +50,8 @@ and its `summary` has no `ok`.
 | `http_status` | int \| null | Final status, `null` when nothing was opened or in a dry run. |
 | `final_url` | string \| null | Where the bytes came from after redirects, redacted. |
 | `verified` | bool \| null | `true` matched, `false` mismatch, `null` nothing to check. |
-| `verified_reason` | string | `matched-<algo>`, `mismatch`, `no-checksum-published`, `unparseable-checksum`, `unchecked`. |
-| `resumed_from` | int | Bytes already on disk when this run started. |
+| `verified_reason` | string | `matched-<algo>`, `mismatch`, `no-checksum-published`, `unparseable-checksum`, `unchecked`, `transfer-failed` (the same value the manifest records for that row). |
+| `resumed_from` | int | Bytes already on disk when this run started — not where an internal retry picked up. |
 | `part` | string \| null | Base name of the kept `.part`, when a failure left one. |
 | `error` | string | Empty on success. |
 

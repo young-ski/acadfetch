@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import signal
 import threading
 from pathlib import Path
@@ -66,6 +67,52 @@ def test_range_ignored_falls_back_to_full(server, tmp_path):
     res = downloader.fetch_file(Client(rate=100, retries=1), f, opts(tmp_path), set())
     assert res.state == "downloaded"
     assert (tmp_path / "a.bin").read_bytes() == payload
+
+
+def test_an_ignored_range_keeps_the_bytes_it_already_had(server, tmp_path):
+    """A server that answers a Range with the whole object must not truncate it."""
+    payload = b"abcdef" * 40
+    server.cfg["ignore_range"] = True
+    server.cfg["truncate_at"] = 100  # every attempt stops short, so all of them fail
+    server.cfg["truncate_times"] = 99
+    f = make_file(server, payload=payload)
+    part = tmp_path / "a.bin.part"
+    part.write_bytes(payload[:120])
+    meta = tmp_path / "a.bin.part.meta.json"
+    meta.write_text(f'{{"url": "{f.url}", "etag": "\\"kept\\""}}', "utf-8")
+
+    res = downloader.fetch_file(Client(rate=100, retries=1), f, opts(tmp_path, retries=0), set())
+
+    assert res.state == "failed"
+    assert part.read_bytes() == payload[:120], "the part was overwritten by the restart"
+    assert not (tmp_path / "a.bin.part.new").exists()
+    # The sidecar must still describe the bytes that were kept, not this
+    # attempt's validator: otherwise the next run asks If-Range with the wrong
+    # one and restarts again.
+    assert json.loads(meta.read_text("utf-8"))["etag"] == '"kept"'
+
+
+def test_a_fresh_download_does_not_claim_it_resumed(server, tmp_path):
+    """``resumed_from`` is what the run started with, not where a retry resumed."""
+    payload = b"0123456789" * 50
+    server.cfg["truncate_at"] = 100
+    server.cfg["truncate_times"] = 1  # the first attempt stops short, the second completes
+    f = make_file(server, payload=payload, checksum="sha256:" + hashlib.sha256(payload).hexdigest())
+
+    res = downloader.fetch_file(Client(rate=100, retries=2), f, opts(tmp_path), set())
+
+    assert res.state == "downloaded"
+    assert res.resumed_from == 0, "a fresh download reported resuming"
+
+
+def test_a_terminal_403_says_what_to_try_next(server, tmp_path):
+    f = make_file(server)
+    server.cfg["forbidden"].add("/a.bin")
+
+    res = downloader.fetch_file(Client(rate=100, retries=2), f, opts(tmp_path), set())
+
+    assert res.state == "failed"
+    assert "--retry-403" in res.error
 
 
 def test_checksum_mismatch_retries_then_fails(server, tmp_path):
@@ -645,3 +692,30 @@ def test_a_416_with_a_matching_checksum_accepts_the_part(server, tmp_path):
     assert res.state == "downloaded", res.error
     assert res.verified is True
     assert server.cfg["hits"]["/a.bin"] == 1, "no refetch when the checksum proves it"
+
+
+def test_a_mismatched_part_that_cannot_be_deleted_says_so(server, tmp_path, monkeypatch):
+    """Re-downloading onto bytes already proven wrong is worse than stopping."""
+    f = make_file(server, checksum="sha256:" + "0" * 64)
+    monkeypatch.setattr(downloader.atomic, "unlink", lambda _path: None)
+
+    res = downloader.fetch_file(Client(rate=100, retries=1), f, opts(tmp_path, retries=1), set())
+
+    assert res.state == "failed"
+    assert res.verified is False, "the mismatch must stay legible downstream"
+    assert "could not be deleted" in res.error
+    assert server.cfg["hits"]["/a.bin"] == 1, "no second download onto the bad part"
+
+
+def test_an_over_limit_part_that_cannot_be_deleted_says_so(server, tmp_path, monkeypatch):
+    """Otherwise the next run resumes straight back into the same wall."""
+    f = make_file(server, payload=b"x" * 5000)
+    monkeypatch.setattr(downloader.atomic, "unlink", lambda _path: None)
+
+    res = downloader.fetch_file(
+        Client(rate=100, retries=1), f, opts(tmp_path, retries=0, max_bytes=100), set()
+    )
+
+    assert res.state == "failed"
+    assert "over --max-size" in res.error
+    assert "could not be deleted" in res.error

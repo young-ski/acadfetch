@@ -22,7 +22,12 @@ below).
 
 | Version | Supported |
 | --- | --- |
-| 0.1.x | yes |
+| 0.6.x | yes |
+| earlier | no — `pip install -U acadfetch` first |
+
+Only the current minor receives security fixes. A report against an older
+version is taken seriously, but the fix lands in a new release of the current
+line.
 
 Releases are cut on demand, not on a schedule. Security fixes get a patch
 version and a `### Security` entry in `CHANGELOG.md`.
@@ -41,6 +46,11 @@ otherwise.
 
 `manifest.json` is not signed. `acadfetch verify` proves that the bytes on disk
 match the manifest; it cannot prove the manifest itself is authentic. Someone
-who can rewrite both the files and the manifest will pass verification. The
-follow-up (`verify --against-remote`, re-reading the published checksums) is
-tracked in the roadmap.
+who can rewrite both the files and the manifest will pass verification.
+
+What closes as much of that gap as can be closed is `verify --against-remote`
+(shipped in 0.3.0): it asks the source again and compares what it publishes now,
+so a rewritten manifest stops agreeing with the repository even though the bytes
+still agree with the manifest. It is off by default because it makes network
+requests; see [docs/manifest.md](docs/manifest.md#remote-re-check). It is still
+not a signature — a compromise of the repository itself defeats it.

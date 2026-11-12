@@ -70,20 +70,29 @@ def describe(checksum: str | None) -> str:
     return f"{parsed[0]}:{parsed[1][:12]}…"
 
 
-def reason(checksum: str | None, verdict: bool | None) -> str:
+def reason(checksum: str | None, verdict: bool | None, state: str | None = None) -> str:
     """A stable, machine-readable note beside ``verified``.
 
     ``verified: null`` on its own cannot tell "the repository published nothing"
     from "it published something we could not parse", and those are different
     promises to a reader.
+
+    ``state`` adds the one thing a checksum cannot describe: a transfer that
+    never produced bytes to check. The manifest and the ``--json`` report both
+    call this, so one run cannot describe the same file two ways.
     """
+    if verdict is False:
+        # A failed row whose bytes were proven wrong is more useful as
+        # ``mismatch`` than as ``transfer-failed``: it names the cause, not only
+        # the symptom.
+        return "mismatch"
+    if state == "failed":
+        return "transfer-failed"
     if not checksum:
         return "no-checksum-published"
     parsed = parse(checksum)
     if parsed is None:
         return "unparseable-checksum"
-    if verdict is False:
-        return "mismatch"
     if verdict is True:
         return f"matched-{parsed[0]}"
     return "unchecked"

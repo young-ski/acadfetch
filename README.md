@@ -73,13 +73,21 @@ python -m pip install -e . pytest mypy && python -m pytest -q
 
 ## Usage
 
-These work as typed:
+One target per run:
 
 ```bash
 acadfetch fetch 10.5281/zenodo.23612969        # a DOI
 acadfetch fetch arxiv:1706.03762               # an arXiv id
 acadfetch fetch https://ndownloader.figshare.com/files/70600233/report.pdf  # any URL
 ```
+
+The first two are answered by Zenodo and arXiv and work from any network those
+are reachable on. The third is a direct URL, so the host decides: figshare's CDN
+answers 403 with a WAF block page from some networks — the same behaviour that
+made its *adapter* not worth keeping in 0.2.0. acadfetch says so and keeps
+nothing, rather than saving the block page as a PDF. If you hit that, the file
+itself is fine; see the `403` section of
+[docs/troubleshooting.md](docs/troubleshooting.md).
 
 figshare was removed in 0.2.0: pass the article's download URL instead, and
 [`--checksum`](docs/migration-0.2.md) keeps the verification the API used to
@@ -92,10 +100,13 @@ acadfetch fetch 10.5281/zenodo.23612969 -n     # dry run: which dir, which files
 acadfetch fetch 10.5281/zenodo.23612969 --only raw.tar.gz
 acadfetch fetch 10.5281/zenodo.23612969 --max-size 2GB   # refuse anything bigger
 acadfetch fetch 10.5281/zenodo.23612969 -j 1 --rate 0.5  # be a good citizen
+acadfetch fetch 10.5281/zenodo.23612969 --retries 2 --retry-403 0  # give up sooner
+acadfetch fetch 10.5281/zenodo.23612969 --manifest-out build/m.json  # a second copy
 acadfetch manifest 10.5281/zenodo.23612969 -o m.json     # metadata only, no bytes
 acadfetch fetch zenodo:123456 --header "Authorization: Bearer $TOKEN"   # restricted
 
 acadfetch verify ./data/manifest.json          # re-hash what you downloaded
+acadfetch --version                            # what is installed
 acadfetch sources                              # adapters, with an example each
 ```
 
@@ -133,16 +144,18 @@ block page is retried; see [docs/troubleshooting.md](docs/troubleshooting.md).
 Progress is one aggregate line for the whole run
 (`3 file(s)  12.4/44.1 MiB  1.8 MiB/s  ETA 0:17`), redrawn in place on a TTY.
 When stdout is a pipe it becomes a new line at most every 5 s (one extra when a
-file starts or stops), so a CI log stays greppable without becoming a wall. `-q`
-turns it off.
+file starts or stops), so a CI log stays greppable without becoming a wall.
+`-q/--quiet` turns it off.
 
-Output defaults to `acadfetch-out/<source>-<id>` (a URL adds its host and a short
+`-o/--out` defaults to `acadfetch-out/<source>-<id>` (a URL adds its host and a short
 hash), and `-n` prints it before
 you spend bandwidth. Files land in `<name>.part` and are renamed only after the
 checksum matches, so an interrupted or failed run never leaves something that
 *looks* finished -- and never throws away the bytes it already paid for: rerun and
-it resumes. `acadfetch-out/` is worth adding to a project's `.gitignore`; this
-repository already has it.
+it resumes. The one case where a run must start over is a server that ignores
+`Range`; the bytes already on disk are then moved aside and kept until a whole
+new copy has arrived, so a restart that dies early costs nothing. `acadfetch-out/`
+is worth adding to a project's `.gitignore`; this repository already has it.
 
 The default directory names the target, not only its filename — `data.csv` from
 two hosts is two datasets, and they do not share a directory. A file already
@@ -271,7 +284,7 @@ so the trace can be pasted into an issue.
 
 ## Politeness
 
-Defaults: 3 parallel transfers, 2 requests/second, 4 retries with jittered
+Defaults: 3 parallel transfers (`-j/--concurrency`), 2 requests/second, 4 retries with jittered
 exponential backoff, `Retry-After` honoured up to 120 s. A block page is retried twice
 (`--retry-403 N`); Zenodo and arXiv are donation-funded —
 `--rate 1 -j 1` costs you minutes and costs them less.

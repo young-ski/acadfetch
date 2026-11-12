@@ -185,3 +185,29 @@ def test_judge_refuses_an_unparseable_side():
         {"u": "md5:" + MD5.hexdigest()}, {"url": "u", "checksum": "nope"}, ""
     )
     assert status == "remote_no_checksum" and "parseable" in detail
+
+
+def test_judge_does_not_call_a_changed_algorithm_tampering():
+    """md5 vs sha256 proves nothing either way, so it must not fail a good row."""
+    from acadfetch import remote
+
+    row = {"url": "u", "checksum": "sha256:" + "a" * 64}
+    status, detail = remote.judge({"u": "md5:" + MD5.hexdigest()}, row, "")
+
+    assert status == "remote_no_checksum"
+    assert "md5" in detail and "sha256" in detail
+
+
+def test_a_redacted_manifest_says_why_the_check_cannot_be_repeated(server, capsys, tmp_path):
+    """A stripped URL cannot be resolved again; the reason has to be visible."""
+    url = _served(server, {"Content-MD5": base64.b64encode(MD5.digest()).decode()})
+    path = _manifest(tmp_path, url)
+    data = json.loads(path.read_text("utf-8"))
+    data["url_redacted"] = True
+    path.write_text(json.dumps(data), "utf-8")
+
+    code, _, err = _run(capsys, "verify", path, "--against-remote", "--json")
+
+    assert code == cli.EXIT_OK
+    assert "credential query parameters stripped" in err
+    assert "--record-full-url" in err

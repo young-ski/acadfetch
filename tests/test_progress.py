@@ -4,7 +4,7 @@ import io
 
 import pytest
 
-from acadfetch.progress import MAX_WIDTH, Progress
+from acadfetch.progress import MAX_WIDTH, Progress, _width
 
 
 class Clock:
@@ -21,7 +21,8 @@ class Clock:
 def make(tmp_path=None, tty=False, enabled=True):
     stream = io.StringIO()
     clock = Clock()
-    prog = Progress(stream=stream, enabled=enabled, is_tty=tty, clock=clock)
+    # A fixed width keeps these tests off the machine's real console size.
+    prog = Progress(stream=stream, enabled=enabled, is_tty=tty, clock=clock, width=MAX_WIDTH)
     return prog, stream, clock
 
 
@@ -115,6 +116,33 @@ def test_line_is_width_capped():
         prog.start(f"file-with-a-long-ish-name-{i}.tar.gz", 10**9)
     prog.advance(10**6)
     assert len(prog._render()) <= MAX_WIDTH
+
+
+def test_a_narrow_terminal_gets_a_line_that_fits_it():
+    """A wrapped line is worse than a clipped one: `\\r` only clears one row."""
+    prog = Progress(stream=io.StringIO(), is_tty=True, clock=Clock(), width=48)
+    prog.start("a" * 80, 10**9)
+    prog.advance(10**6)
+    assert _width(prog._render()) <= 48
+
+
+def test_a_wide_character_costs_two_columns():
+    """CJK names are counted in columns, or the line still wraps."""
+    prog = Progress(stream=io.StringIO(), is_tty=True, clock=Clock(), width=40)
+    prog.start("学" * 30 + ".pdf", 10**9)
+    prog.advance(10**6)
+    assert "…" in prog._render()
+    assert _width(prog._render()) <= 40
+
+
+def test_the_speed_estimate_settles_towards_the_real_rate():
+    """Eight one-second chunks at a steady 1 MiB/s must not report half of it."""
+    prog, _, clock = make()
+    prog.start("a", 10**9)
+    for _ in range(15):
+        clock.tick(1)
+        prog.advance(1_000_000)
+    assert prog._speed() > 900_000, prog._speed()
 
 
 def test_throttle_suppresses_rapid_emits():

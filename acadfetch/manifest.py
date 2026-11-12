@@ -119,10 +119,10 @@ def _entry(  # noqa: ANN001
         "http_status": result.http_status if result else None,
         "retrieved_at": result.retrieved_at if result else None,
         # PR-2 adds final_url / etag / http_status / retrieved_at here.
-        "verified_reason": (
-            "transfer-failed"
-            if result and result.state == "failed"
-            else verify.reason(f.checksum, result.verified if result else None)
+        "verified_reason": verify.reason(
+            f.checksum,
+            result.verified if result else None,
+            result.state if result else None,
         ),
     }
     if state == "not-selected":
