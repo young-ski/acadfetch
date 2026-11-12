@@ -6,7 +6,7 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
-## [0.6.2] - 2026-11-12
+## [0.6.3] - 2026-11-12
 
 ### Fixed
 
@@ -15,6 +15,10 @@ pre-1.0: a minor bump may break a flag.
   (owner pid, checked non-intrusively); a live owner refuses the second run with
   the pid and the file to delete, a dead or unreadable owner is taken over, and
   the lock is released on every exit path.
+
+## [0.6.2] - 2026-11-12
+
+### Fixed
 
 - A `416` on a kept `.part` was always read as ``already complete``, so a part
   left by an older object was renamed into place with nothing checked when the
