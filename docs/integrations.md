@@ -51,8 +51,39 @@ rule dataset:
         shell("acadfetch verify {output}/manifest.json")
 ```
 
-Pooch and BagIt exports are not implemented either; the manifest already carries
-what both would need, so they are a thin wrapper away.
+Pooch exports are covered below; a BagIt export is not implemented — the manifest
+already carries what it would need, so it is a thin wrapper away.
+
+## Pooch
+
+`pooch` handles caching, hashing and moving a file into place, but its downloader
+issues one flat GET: a link that drops at 80% costs the whole file. `acadfetch`
+ships a pooch downloader that supplies only the transport — the same client the
+CLI uses, so `Retry-After` is honoured, a 5xx or a WAF block page is retried, the
+`.part` is resumed instead of restarted, and a credential header is dropped when a
+redirect leaves the origin.
+
+```python
+import pooch
+from acadfetch.pooch import downloader
+
+path = pooch.retrieve(
+    "https://zenodo.org/records/123456/files/raw.tar.gz",
+    known_hash="md5:9f2c…",
+    downloader=downloader,
+)
+```
+
+pooch still does the hashing and the move, so this cannot weaken verification — it
+can only make the bytes arrive. Configure it like the CLI with
+`Downloader(rate=1, retries=4)`, and reach a restricted record with
+`Downloader(headers={"Authorization": "Bearer …"})`.
+
+Two limits come from how pooch drives a downloader, and are worth knowing before
+you rely on it: pooch hands each attempt a **fresh temporary file**, so a partial
+is resumed within one attempt and not across pooch's own retries; and
+`progressbar=True` is implemented inside pooch's downloader, so a transfer through
+this one is silent.
 
 ## Politeness
 

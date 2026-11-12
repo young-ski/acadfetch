@@ -7,6 +7,31 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-12
+
+### Added
+
+- `acadfetch.pooch`: a `pooch` downloader that supplies acadfetch's transport, so
+  a `pooch.retrieve` in an existing workflow gets `Retry-After`, retried 5xx and
+  WAF block pages, a resumed `.part` inside the attempt, and a credential header
+  that is dropped when a redirect leaves the origin. `pooch` keeps the hashing and
+  the move, so the integration cannot weaken verification.
+
+  ```python
+  import pooch
+  from acadfetch.pooch import downloader
+
+  path = pooch.retrieve(url, known_hash="md5:…", downloader=downloader)
+  ```
+
+  It is a plain callable with `Downloader(rate=…, retries=…, headers=…)`, because
+  a callable is the whole contract `pooch` asks for. Two limits are documented
+  rather than hidden: `pooch` hands each attempt a fresh temporary file, so a
+  partial resumes within one attempt and not across `pooch`'s own retries; and
+  `progressbar=True` lives inside `pooch`'s downloader, so a transfer through this
+  one is silent. `pooch` is a test-only dependency; the package still imports
+  nothing outside the standard library.
+
 ## [0.6.4] - 2026-11-12
 
 A batch of correctness and honesty fixes. Two of them cost a user real bytes or

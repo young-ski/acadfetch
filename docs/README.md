@@ -7,7 +7,8 @@ made, not how the tool behaves today.
 ## Using it
 
 - [demo.md](demo.md) — a real 30-second transcript: dry run, fetch, verify.
-- [integrations.md](integrations.md) — aria2, Make, GitHub Actions, Snakemake.
+- [integrations.md](integrations.md) — aria2, Make, GitHub Actions, Snakemake, and
+  a pooch downloader.
 - [troubleshooting.md](troubleshooting.md) — arranged by what you are looking at,
   not by cause.
 - [manifest.md](manifest.md) — every field and state of `manifest.json`, and what

@@ -4,7 +4,7 @@
 
 ```bash
 python -m venv .venv && . .venv/bin/activate   # Windows: .venv/Scripts/activate
-python -m pip install -e . pytest pytest-cov ruff mypy
+python -m pip install -e . pytest pytest-cov ruff mypy pooch
 ruff check . && pytest -q
 
 CI runs four gates; matching them locally is the point, so run all of them
@@ -69,6 +69,10 @@ through [`SECURITY.md`](SECURITY.md), not the issue tracker.
 HTTP server that can be told to ignore `Range`, truncate responses, or serve
 bytes that fail the checksum — cover a resume path there before touching the
 transfer loop.
+
+`pooch` is installed only to test `acadfetch/pooch.py`; it is a tool for the
+suite, not a runtime dependency, and the core still imports nothing outside the
+standard library.
 
 `scripts/probe_resume.py <record-id>` interrupts a real download and resumes it.
 It needs network; run it when you change `downloader.py`.
