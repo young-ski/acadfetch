@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from http.client import HTTPException
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from . import atomic, debug, naming, verify
 from .client import Client
@@ -73,6 +73,7 @@ _BINARY_EXT = frozenset(
     }
 )
 META_SUFFIX = ".part.meta.json"
+LOCK_NAME = ".acadfetch.lock"
 
 
 @dataclass(frozen=True)
@@ -471,6 +472,82 @@ def check_disk(
     return (free, needed)
 
 
+def _pid_alive(pid: int) -> bool:
+    """Is ``pid`` still running, without disturbing it?
+
+    ``os.kill(pid, 0)`` is the POSIX idiom, but on Windows it sends a console
+    CTRL_C: probing our own pid interrupts the process asking the question.
+    """
+    if os.name == "nt":
+        import ctypes
+
+        # The attribute does not exist off Windows, and both ruff and mypy
+        # check this file on Linux; a typed lookup keeps both quiet.
+        windll: Any = getattr(ctypes, "windll")  # noqa: B009
+        kernel32 = windll.kernel32
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # query limited info
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == 259  # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:  # exists, owned by someone else
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _take_lock(out: Path) -> Path:
+    """Refuse to share the directory with a live concurrent run.
+
+    Two runs into one ``-o`` interleave writes into the same ``.part`` and the
+    survivor is a file neither of them wrote. The lock records the owner; a dead
+    owner, or one we cannot read, is taken over.
+    """
+    lock = out / LOCK_NAME
+    for _ in range(2):
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            owner = 0
+            try:
+                owner = int(json.loads(lock.read_text("utf-8")).get("pid") or 0)
+            except (OSError, ValueError):
+                owner = 0
+            # A live owner is another run, even when it is this pid: two
+            # fetches into one directory in one process clash just as badly.
+            # Only a dead or unreadable owner is stale.
+            if owner and _pid_alive(owner):
+                raise TargetError(
+                    f"{out} is being written by pid {owner}; wait for it, or "
+                    f"delete {lock} if that process is gone"
+                ) from None
+            atomic.unlink(lock)
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump({"pid": os.getpid(), "started": _now()}, fh)
+        return lock
+    raise TargetError(f"could not take the lock in {out}; is another run active?")
+
+
+def _release_lock(lock: Path) -> None:
+    try:
+        if int(json.loads(lock.read_text("utf-8")).get("pid") or 0) != os.getpid():
+            return
+    except (OSError, ValueError):
+        pass
+    atomic.unlink(lock)
+
+
 def _reserved(files) -> set[str]:  # noqa: ANN001
     """Names the tool itself will write, so a repository file cannot take them.
 
@@ -479,7 +556,7 @@ def _reserved(files) -> set[str]:  # noqa: ANN001
     Reserving the derived names is cheaper than teaching every later step to
     dodge them.
     """
-    reserved = {"manifest.json", "manifest.json.tmp"}
+    reserved = {"manifest.json", "manifest.json.tmp", LOCK_NAME}
     for file in files:
         name = naming.sanitize(file.name).lower()
         reserved.add(name + ".part")
@@ -736,15 +813,24 @@ def _fetch_record(
 
     if opts.max_bytes:
         check_total(record, opts.max_bytes)
+    lock: Path | None = None
     if not opts.dry_run:
         check_disk(files, opts.out)
+        lock = _take_lock(opts.out)
         opts.trusted = _trusted_urls(opts.out / "manifest.json")
 
     taken = _reserved(files)
-    lock = threading.Lock()
     results: list[Result] = []
     opts.interrupted = False
 
+    try:
+        return _drain(files, record, opts, client, taken, results)
+    finally:
+        if lock is not None:
+            _release_lock(lock)
+
+
+def _drain(files, record, opts, client, taken, results):  # noqa: ANN001, ANN202
     if opts.concurrency <= 1:
         for file in files:
             try:
@@ -767,9 +853,10 @@ def _fetch_record(
     window = max(opts.concurrency * 2, 1)
     queue = iter(files)
     futures = {}
+    name_lock = threading.Lock()
 
     def submit(file: File) -> None:  # noqa: ANN001
-        with lock:
+        with name_lock:
             futures[pool.submit(fetch_file, client, file, opts, taken)] = file
 
     try:

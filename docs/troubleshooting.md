@@ -35,6 +35,12 @@ Re-run with `--verbose` (or `ACADFETCH_DEBUG=1`). It prints every request,
 retry decision and the traceback to stderr; tokens stay masked. Paste the
 trace, not a screenshot.
 
+## `is being written by pid N`
+
+Another run is using the same `-o` directory. Two runs interleave writes into
+the same `.part`, so the second one stops instead of corrupting both. Wait for
+the first, or delete `.acadfetch.lock` in that directory if the process is gone.
+
 ## A proxy, or TLS interception
 
 Environment proxies are used automatically. When the proxy is only known per
