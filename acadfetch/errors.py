@@ -30,6 +30,7 @@ class HttpError(AcFError):
         detail: str = "",
         transient: bool = False,
         reason: str = "",
+        content_range: str | None = None,
     ) -> None:
         self.status = status
         self.url = url
@@ -37,6 +38,9 @@ class HttpError(AcFError):
         #: Machine-readable cause for callers that must branch on it, e.g.
         #: ``html-page``: the body is a block/login page, not the file asked for.
         self.reason = reason
+        #: ``Content-Range`` of the answer, so a 416 can say how big the object
+        #: is supposed to be.
+        self.content_range = content_range
         if status:
             text = f"HTTP {status} for {url}{': ' + detail if detail else ''}"
         elif reason == "max-size":

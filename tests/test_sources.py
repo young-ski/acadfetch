@@ -320,3 +320,14 @@ def test_two_legacy_papers_no_longer_share_a_name():
 def test_direct_resolve_rejects_a_non_url():
     with pytest.raises(TargetError, match="not a URL"):
         direct.resolve(HeadClient({}), "zenodo:1")
+
+
+def test_an_older_zenodo_version_follows_latest():
+    """The API no longer sends ``is_latest``, but if a source does, follow it."""
+    old = dict(ZENODO, is_latest=False, links={"latest": "https://zenodo.org/api/records/99"})
+    new = dict(ZENODO, id=99, doi="10.5281/zenodo.99")
+    record = zenodo.resolve(FakeClient({"records/1": old, "records/99": new}), "10.5281/zenodo.1")
+
+    assert record.doi == "10.5281/zenodo.99"
+    assert record.files[0].name == "a.csv"
+    assert record.target == "10.5281/zenodo.1", "the manifest keeps what was asked for"

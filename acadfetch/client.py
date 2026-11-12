@@ -236,7 +236,12 @@ class Client:
                 if exc.code in RETRY_STATUS:
                     pass
                 elif not last_blocked:
-                    raise HttpError(exc.code, url, detail) from exc
+                    raise HttpError(
+                        exc.code,
+                        url,
+                        detail,
+                        content_range=exc.headers.get("Content-Range") if exc.headers else None,
+                    ) from exc
                 elif waf >= block_retries:
                     raise HttpError(
                         403,
@@ -270,7 +275,13 @@ class Client:
                 if last_blocked
                 else last_detail
             )
-            raise HttpError(last.code, url, detail, transient=True) from last
+            raise HttpError(
+                last.code,
+                url,
+                detail,
+                transient=True,
+                content_range=last.headers.get("Content-Range") if last.headers else None,
+            ) from last
         raise HttpError(0, url, last_detail or str(last)) from last
 
     # -- public ------------------------------------------------------------

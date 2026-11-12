@@ -588,3 +588,60 @@ def test_a_failed_transfer_records_the_status(server, tmp_path):
     assert res.state == "failed"
     assert res.http_status == 500
     assert res.retrieved_at
+
+
+# -- 416: only evidence makes the kept part the answer ---------------------
+
+
+def _stale_part(tmp_path, url, body: bytes):
+    (tmp_path / "a.bin.part").write_bytes(body)
+    (tmp_path / "a.bin.part.meta.json").write_text(f'{{"url": "{url}", "etag": ""v1""}}', "utf-8")
+
+
+def test_a_stale_part_is_restarted_not_renamed(server, tmp_path):
+    """A part from an older object is bigger than the file; 416 must not win."""
+    payload = b"new" * 1000
+    server.cfg["files"]["/a.bin"] = payload
+    url = server.base + "/a.bin"
+    _stale_part(tmp_path, url, b"old" * 2000)  # 6000 bytes vs 3000
+    server.cfg["answers_416"] = True
+
+    res = downloader.fetch_file(
+        Client(rate=1000, retries=1), File(url, "a.bin"), opts(tmp_path, retries=1), set()
+    )
+
+    assert res.state == "downloaded", res.error
+    assert (tmp_path / "a.bin").read_bytes() == payload
+
+
+def test_a_416_without_a_size_and_without_checksum_restarts(server, tmp_path):
+    payload = b"fresh bytes"
+    server.cfg["files"]["/a.bin"] = payload
+    url = server.base + "/a.bin"
+    _stale_part(tmp_path, url, b"stale")
+    server.cfg["answers_416"] = True
+    server.cfg["416_omits_range"] = True
+
+    res = downloader.fetch_file(
+        Client(rate=1000, retries=1), File(url, "a.bin"), opts(tmp_path, retries=1), set()
+    )
+
+    assert res.state == "downloaded", res.error
+    assert (tmp_path / "a.bin").read_bytes() == payload
+
+
+def test_a_416_with_a_matching_checksum_accepts_the_part(server, tmp_path):
+    """Proof beats a missing Content-Range."""
+    payload = b"proven bytes"
+    server.cfg["files"]["/a.bin"] = payload
+    url = server.base + "/a.bin"
+    _stale_part(tmp_path, url, payload)
+    server.cfg["answers_416"] = True
+    server.cfg["416_omits_range"] = True
+    f = File(url, "a.bin", checksum="sha256:" + hashlib.sha256(payload).hexdigest())
+
+    res = downloader.fetch_file(Client(rate=1000, retries=0), f, opts(tmp_path, retries=0), set())
+
+    assert res.state == "downloaded", res.error
+    assert res.verified is True
+    assert server.cfg["hits"]["/a.bin"] == 1, "no refetch when the checksum proves it"

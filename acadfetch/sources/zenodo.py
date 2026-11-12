@@ -3,6 +3,10 @@
 The public REST API exposes ``files[].links.self`` as a redirecting download
 URL and publishes ``files[].checksum`` as ``md5:<hex>``, which is what makes
 verification possible here.
+
+``is_latest`` / ``links.latest`` are honoured for an older version DOI. The
+current API does not send ``is_latest`` (checked 2026-11), so the branch is
+dormant; a test pins what it would do if it returned.
 """
 
 from __future__ import annotations
