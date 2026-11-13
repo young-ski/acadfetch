@@ -14,10 +14,22 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
-import snakemake_storage_plugin_acadfetch as plugin
-from snakemake_interface_common.logging import get_logger
-from snakemake_interface_storage_plugins.io import IOCacheStorageInterface
-from snakemake_interface_storage_plugins.registry import StoragePluginRegistry
+
+try:
+    import snakemake_storage_plugin_acadfetch as plugin
+    from snakemake_interface_common.logging import get_logger
+    from snakemake_interface_storage_plugins.io import IOCacheStorageInterface
+    from snakemake_interface_storage_plugins.registry import StoragePluginRegistry
+except ModuleNotFoundError:  # pragma: no cover - a checkout without snakemake
+    # Snakemake is a test tool here, not a dependency of acadfetch, and installing
+    # it pins `packaging` below what pipx and twine need. So a checkout without it
+    # skips rather than fails; CI installs it and asserts its presence in a
+    # separate, hard step before pytest ever runs.
+    pytest.skip(
+        "needs Snakemake installed and this checkout importable: "
+        "pip install snakemake, then run pytest from the plugin directory",
+        allow_module_level=True,
+    )
 
 PAYLOAD = b"snakemake payload" * 400
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent

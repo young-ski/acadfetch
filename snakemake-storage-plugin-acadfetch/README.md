@@ -59,3 +59,18 @@ snakemake --storage-acadfetch-rate 1 --storage-acadfetch-header "Authorization: 
 A query is one file. Listing a record's files is what `-w/--urls` is for; doing it
 here would add a network round trip per rule and hide which file the rule depends
 on.
+
+## Develop
+
+The tests need Snakemake, which is a test tool here rather than a dependency:
+installing it pins `packaging` below what `pipx` and `twine` need, so acadfetch's
+own environment does not carry it. Without it the suite skips instead of failing,
+and `pytest` exits 5 because nothing was collected:
+
+```bash
+pip install snakemake pytest
+cd snakemake-storage-plugin-acadfetch && python -m pytest tests
+```
+
+CI installs Snakemake and asserts its presence in a separate step before pytest,
+so a missing install cannot silently turn the suite green.
