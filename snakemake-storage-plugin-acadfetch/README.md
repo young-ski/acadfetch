@@ -11,6 +11,9 @@ instead of restarted.
 
 ## Install
 
+Python 3.11 or newer: on 3.10, pip resolves Snakemake 7.x, which predates the
+storage plugin interface entirely.
+
 ```bash
 pip install "git+https://github.com/young-ski/acadfetch.git#subdirectory=snakemake-storage-plugin-acadfetch"
 ```

@@ -30,7 +30,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.10", "3.13"]
+        # 3.11 is the floor: on 3.10 pip resolves snakemake 7.x, which predates
+        # the storage plugin interface altogether. The plugin declares the same
+        # floor, and the official plugins do too.
+        python: ["3.11", "3.13"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -41,7 +44,11 @@ jobs:
       # rather than a published wheel, so a break shows up here, not at release.
       - run: python -m pip install -e .
       - run: python -m pip install -e snakemake-storage-plugin-acadfetch --no-deps
-      - run: python -m pip install snakemake pytest
+      # The interface packages come from the plugin's own metadata, but they are
+      # asked for by name too: on a Python where snakemake resolves to an old
+      # major, snakemake does not depend on them and the tests import them.
+      - run: python -m pip install snakemake snakemake-interface-storage-plugins
+             snakemake-interface-common pytest
       - name: The plugin is found by Snakemake's own plugin registry
         run: |
           python -c "
