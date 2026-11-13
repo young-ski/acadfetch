@@ -55,10 +55,8 @@ rule fetch:
         "cp {input} {output}"
 ```
 
-Until it has a PyPI release, install it from this checkout:
-
 ```bash
-pip install "git+https://github.com/young-ski/acadfetch.git#subdirectory=snakemake-storage-plugin-acadfetch"
+pip install snakemake-storage-plugin-acadfetch
 ```
 
 `--storage-acadfetch-rate`, `-retries`, `-timeout` and `-header` tune it the way

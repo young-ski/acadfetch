@@ -15,11 +15,8 @@ Python 3.11 or newer: on 3.10, pip resolves Snakemake 7.x, which predates the
 storage plugin interface entirely.
 
 ```bash
-pip install "git+https://github.com/young-ski/acadfetch.git#subdirectory=snakemake-storage-plugin-acadfetch"
+pip install snakemake-storage-plugin-acadfetch
 ```
-
-The intended PyPI name is `snakemake-storage-plugin-acadfetch`; until that release
-exists, install from the checkout as above.
 
 ## Use
 
