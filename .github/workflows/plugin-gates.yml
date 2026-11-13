@@ -72,11 +72,20 @@ jobs:
           assert not [n for n in names if n.startswith("tests/")], "tests leaked into the wheel"
           print(f"wheel: {len(names)} entries")
           PY
-      - name: Installs into an empty environment
+      - name: Installs into an empty environment, pulling nothing in
         run: |
           python -m venv /tmp/pluggable
           /tmp/pluggable/bin/python -m pip install --no-deps --no-index dist/*.whl
-          /tmp/pluggable/bin/python -c "import snakemake_storage_plugin_acadfetch as p; print(p.StorageProvider.__name__)"
+          # find_spec, not import: this step proves the wheel installs and puts
+          # the module on the path without its dependencies, so a bundled copy
+          # of something would show up here. Importing it belongs to the test
+          # job and to the post-publish smoke, which have the interfaces.
+          /tmp/pluggable/bin/python -c "
+          import importlib.util as u
+          spec = u.find_spec('snakemake_storage_plugin_acadfetch')
+          assert spec is not None, 'module missing from the wheel'
+          print('module at', spec.origin)
+          "
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plugin-dist
