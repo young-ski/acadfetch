@@ -7,6 +7,21 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-11-13
+
+### Changed
+
+- The Chinese section of the README is a section now, not a stub. It was five
+  lines: a one-sentence pitch, two commands with a placeholder id, and "MIT". It
+  now covers install, a dry run first, what the tool actually does for each
+  failure mode, the pipeline outputs, exit codes, what a token is sent to, the
+  supported sources, and the limits worth knowing before relying on it — with a
+  real record id so the first command can be pasted. The command lines in it are
+  covered by `tests/test_claims.py` like every other documented command.
+- `docs/integrations.md` and the plugin README install the published
+  `snakemake-storage-plugin-acadfetch` from PyPI instead of from a git
+  subdirectory, now that it has a release.
+
 ## [0.7.1] - 2026-11-13
 
 ### Added

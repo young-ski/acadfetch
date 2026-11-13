@@ -4,6 +4,8 @@
 [![PyPI](https://img.shields.io/pypi/v/acadfetch.svg)](https://pypi.org/project/acadfetch/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+**English** · [简体中文](#中文)
+
 Batch-download files from academic data repositories — resumably, rate-limited, and
 checked against the checksums the repository published.
 
@@ -341,12 +343,104 @@ merge; the next good night closes the issue.
 学术数据仓库的批量下载器：断点续传、全局限速、按仓库公布的校验和验证，并落
 `manifest.json`（DOI、许可协议、每文件 SHA-256）供日后复现。
 
+它不是搜索器、不抓付费墙、也不是引文管理器 —— 它只管"取数据"这一步，并让这一步
+事后可证明。
+
+### 安装
+
+Python 3.10–3.15，零运行时依赖。
+
 ```bash
-acadfetch fetch 10.5281/zenodo.123456 -o ./data
-acadfetch verify ./data/manifest.json
+uvx acadfetch fetch 10.5281/zenodo.23612969   # 不安装，直接跑
 ```
 
-MIT。
+```bash
+pipx install acadfetch                        # 或者装到 PATH 上
+```
+
+### 快速开始
+
+`10.5281/zenodo.23612969` 是真实记录，可以直接复制；其余 id 都是占位符。
+
+```bash
+acadfetch fetch 10.5281/zenodo.23612969 -n     # 先看：落到哪、传多少、许可是什么
+acadfetch fetch 10.5281/zenodo.23612969 -o ./data
+acadfetch verify ./data/manifest.json          # 事后复验；对不上就非零退出
+```
+
+目标也可以是 `arxiv:1706.03762`、任意 DOI，或任意 `https://` 直链。
+
+> 直链成败由对方主机决定：figshare 的 CDN 在某些网络会回 403 拦截页（当年删掉
+> figshare 适配器正是因为这个）。acadfetch 会明说这是拦截页、而不是把 HTML 存成
+> PDF，并把下一条命令给你。
+
+### 它替你保住的东西
+
+| 情况 | 它怎么做 |
+| --- | --- |
+| 传到 80% 断了 | `.part` 保留，重跑用 `Range`/`If-Range` 接着传；服务器若无视 `Range`，旧字节先挪到一边，整份新文件到齐才替换 |
+| 悄悄损坏 | 按仓库公布的 md5/sha256 校验，不符就重下；仍不符则 `verified: false` 并删掉坏字节 |
+| "我到底下的是哪个版本" | `manifest.json` 记 DOI、许可、每文件 SHA-256、最终 URL、HTTP 状态与时间 |
+| 被限流吃 403 | 全局令牌桶限速，遵守 `Retry-After`，拦截页按次数重试 |
+
+默认 3 并发、2 请求/秒、4 次重试。Zenodo 和 arXiv 靠募捐运营，`--rate 1 -j 1`
+多花你几分钟，对面少受点罪。
+
+### 进流水线
+
+```bash
+acadfetch fetch 10.5281/zenodo.23612969 --json    # 一个 JSON 文档给 stdout，进度走 stderr
+acadfetch fetch 10.5281/zenodo.23612969 -w -      # 输出 aria2 可用 URL 列表，不传字节
+```
+
+`--json` 的字段契约见 [docs/json-report.md](docs/json-report.md)；`report` 是文档
+版本号，只加字段、不改语义。
+
+### 退出码
+
+`0` 成功、`1` 失败、`2` 部分成功、`64` 用法错误、`130` 被中断（`.part` 已保留，
+重跑即可续）。
+
+### 令牌
+
+`ZENODO_TOKEN` 从环境读取，**只发给 Zenodo**；跨主机跳转时剥掉，https 降级到
+http 时也会剥掉并告警。manifest 只记变量名和后四位。
+
+```bash
+export ZENODO_TOKEN=...
+acadfetch fetch zenodo:123456
+```
+
+### 支持的源
+
+| 源 | 目标形式 | 校验和 |
+| --- | --- | --- |
+| Zenodo | DOI `10.5281/zenodo.N`、`zenodo:N`、记录 URL | md5 |
+| arXiv | `arxiv:ID`、裸 ID、abs/pdf URL | 无（只比字节数） |
+| doi.org | 任意 DOI，解析后再分派 | 视源而定 |
+| 直链 | 任意 `http(s)` URL | 响应头里有就用 |
+
+figshare 适配器在 0.2.0 已移除；源不公布校验和时用 `--checksum md5:...` 补上，
+旧 manifest 仍可 `verify`。见 [docs/migration-0.2.md](docs/migration-0.2.md)。
+
+### 已知限制
+
+- `manifest.json` 没有签名：`verify` 证明磁盘上的字节与 manifest 一致，不能证明
+  manifest 本身没被改写。补这一层用 `verify --against-remote`（会重新问源站），
+  细节见 [SECURITY.md](SECURITY.md)。
+- arXiv 不公布校验和，验证降级为字节数，`verified` 是 `null` 而不是假的安心。
+- 没有搜索与分页，目标得你自己给。
+- Windows ARM 未测；macOS 只做尽力而为（在 CI 里，但不阻塞发布）。
+
+### 更多
+
+- 30 秒演示 [docs/demo.md](docs/demo.md) · 按症状排障 [docs/troubleshooting.md](docs/troubleshooting.md) · 接进流水线 [docs/integrations.md](docs/integrations.md)（Make、CI、aria2、Snakemake 插件、pooch 下载器）
+- 加源、动传输、写测试的规矩见 [CONTRIBUTING.md](CONTRIBUTING.md)
+
+### 许可
+
+工具是 MIT。数据本身的许可见 manifest 的 `license` 字段；`unknown` 表示**转发前先
+确认**，而 `-n` 会在花掉带宽之前就把它打出来。
 
 ## Citing
 
