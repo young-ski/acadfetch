@@ -1,0 +1,110 @@
+name: Plugin release
+
+# Publishing is OIDC-only, like acadfetch's: no PyPI token in the repository. This
+# is a *separate* PyPI project, so it needs its own trusted publisher registered
+# against exactly this workflow file and environment.
+#
+# Cut a release with: git tag plugin-v0.1.0 && git push origin plugin-v0.1.0
+# The tag must be on main and must match the version in the plugin's pyproject.
+#
+# The `plugin-v` prefix is deliberate: release.yml triggers on `v*`, and a plugin
+# tag must never start acadfetch's release.
+
+on:
+  push:
+    tags: ["plugin-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-release
+  cancel-in-progress: false
+
+jobs:
+  # The same gates a plugin PR runs, not a second copy of them.
+  gates:
+    uses: ./.github/workflows/plugin-gates.yml
+
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: The tag is on main
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
+      - name: The tag matches the packaged version
+        run: |
+          version=$(python -c "import re, pathlib; \
+            print(re.search(r'^version = \"(.+)\"', pathlib.Path('snakemake-storage-plugin-acadfetch/pyproject.toml').read_text(), re.M).group(1))")
+          echo "tag ${GITHUB_REF_NAME} vs version ${version}"
+          test "plugin-v${version}" = "${GITHUB_REF_NAME}"
+
+  publish:
+    needs: [gates, guard]
+    if: >-
+      always() && needs.gates.result == 'success'
+      && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Must match the environment named on PyPI's trusted publisher for this
+    # project. Reusing the environment acadfetch already uses keeps one approval
+    # gate for both packages; the publisher itself is still scoped per project.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/snakemake-storage-plugin-acadfetch
+    permissions:
+      id-token: write # the OIDC token PyPI accepts
+      attestations: write # the provenance record below
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: plugin-dist
+          path: dist/
+
+      - name: Say what is about to be uploaded
+        run: ls -l dist/ && sha256sum dist/*
+
+      - name: Attach a provenance record to the artifacts
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: "dist/*"
+
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          skip-existing: false
+
+  # A plugin that installs but is never discovered is the failure this catches.
+  smoke:
+    needs: publish
+    if: always() && needs.publish.result == 'success' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install the published version, from PyPI
+        run: |
+          version="${GITHUB_REF_NAME#plugin-v}"
+          python -m pip install --no-cache-dir snakemake
+          for attempt in 1 2 3 4 5; do
+            python -m pip install --no-cache-dir "snakemake-storage-plugin-acadfetch==${version}" && break
+            echo "not on the index yet ($attempt), waiting"
+            sleep 15
+          done
+          python -m pip install --no-cache-dir "snakemake-storage-plugin-acadfetch==${version}"
+      - name: Snakemake's registry finds it
+        run: |
+          python -c "
+          from snakemake_interface_storage_plugins.registry import StoragePluginRegistry
+          reg = StoragePluginRegistry()
+          print('registered:', reg.get_registered_plugins())
+          assert 'acadfetch' in reg.get_registered_plugins(), reg.get_registered_plugins()
+          "

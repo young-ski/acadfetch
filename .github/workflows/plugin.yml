@@ -1,8 +1,8 @@
 name: Plugin
 
 # The storage plugin lives in this repository but is a second distribution with
-# its own dependencies. It gets its own workflow so that acadfetch's CI stays
-# free of snakemake, and so a plugin break is attributed to the plugin.
+# its own dependencies. It gets its own callers so that acadfetch's CI stays free
+# of snakemake, and so a plugin break is attributed to the plugin.
 
 on:
   push:
@@ -10,10 +10,12 @@ on:
     paths:
       - "snakemake-storage-plugin-acadfetch/**"
       - ".github/workflows/plugin.yml"
+      - ".github/workflows/plugin-gates.yml"
   pull_request:
     paths:
       - "snakemake-storage-plugin-acadfetch/**"
       - ".github/workflows/plugin.yml"
+      - ".github/workflows/plugin-gates.yml"
   workflow_dispatch:
 
 permissions:
@@ -24,54 +26,5 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        # 3.11 is the floor: on 3.10 pip resolves snakemake 7.x, which predates
-        # the storage plugin interface altogether. The plugin declares the same
-        # floor, and the official plugins do too.
-        python: ["3.11", "3.13"]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: ${{ matrix.python }}
-          cache: pip
-      # acadfetch itself first: the plugin imports the code in this checkout
-      # rather than a published wheel, so a break shows up here, not at release.
-      - run: python -m pip install -e .
-      - run: python -m pip install -e snakemake-storage-plugin-acadfetch --no-deps
-      # The interface packages come from the plugin's own metadata, but they are
-      # asked for by name too: on a Python where snakemake resolves to an old
-      # major, snakemake does not depend on them and the tests import them.
-      - run: python -m pip install snakemake snakemake-interface-storage-plugins
-             snakemake-interface-common pytest
-      - name: The plugin is found by Snakemake's own plugin registry
-        run: |
-          python -c "
-          import sys
-          sys.path.insert(0, 'snakemake-storage-plugin-acadfetch')
-          from snakemake_interface_storage_plugins.registry import StoragePluginRegistry
-          reg = StoragePluginRegistry()
-          reg.collect_plugins()
-          assert 'acadfetch' in reg.get_registered_plugins(), reg.get_registered_plugins()
-          print('registered:', reg.get_registered_plugins())
-          "
-      - run: python -m pytest snakemake-storage-plugin-acadfetch/tests -q
-      - name: It packages
-        run: |
-          python -m pip install build twine
-          python -m build snakemake-storage-plugin-acadfetch --outdir dist-plugin
-          python -m twine check dist-plugin/*
-          python - <<'PY'
-          import glob, tarfile, zipfile
-
-          wheel = glob.glob("dist-plugin/*.whl")[0]
-          names = zipfile.ZipFile(wheel).namelist()
-          assert "snakemake_storage_plugin_acadfetch/__init__.py" in names, names
-          assert [n for n in names if "licenses/LICENSE" in n], "LICENSE missing from dist-info"
-          print(f"wheel: {len(names)} entries")
-          PY
+  gates:
+    uses: ./.github/workflows/plugin-gates.yml

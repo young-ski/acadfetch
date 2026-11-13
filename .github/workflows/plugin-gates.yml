@@ -1,0 +1,83 @@
+name: Plugin gates
+
+# One definition of "green" for the plugin, called by its CI and by its release.
+# The same reason as gates.yml for acadfetch: two copies drift, and the comment
+# claiming they match is the last thing to notice.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 is the floor: on 3.10 pip resolves snakemake 7.x, which predates
+        # the storage plugin interface altogether. The plugin declares the same
+        # floor, and the official plugins do too.
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      # acadfetch itself first: the plugin imports the code in this checkout
+      # rather than a published wheel, so a break shows up here, not at release.
+      - run: python -m pip install -e .
+      - run: python -m pip install -e snakemake-storage-plugin-acadfetch --no-deps
+      # The interface packages come from the plugin's own metadata, but they are
+      # asked for by name too: on a Python where snakemake resolves to an old
+      # major, snakemake does not depend on them and the tests import them.
+      - run: python -m pip install snakemake snakemake-interface-storage-plugins
+             snakemake-interface-common pytest
+      - name: The plugin is found by Snakemake's own plugin registry
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'snakemake-storage-plugin-acadfetch')
+          from snakemake_interface_storage_plugins.registry import StoragePluginRegistry
+          reg = StoragePluginRegistry()
+          reg.collect_plugins()
+          assert 'acadfetch' in reg.get_registered_plugins(), reg.get_registered_plugins()
+          print('registered:', reg.get_registered_plugins())
+          "
+      - run: python -m pytest snakemake-storage-plugin-acadfetch/tests -q
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: python -m pip install build twine
+      - run: python -m build snakemake-storage-plugin-acadfetch --outdir dist
+      - name: Metadata and contents
+        run: |
+          python -m twine check dist/*
+          python - <<'PY'
+          import glob, zipfile
+
+          wheel = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(wheel).namelist()
+          assert "snakemake_storage_plugin_acadfetch/__init__.py" in names, names
+          assert [n for n in names if "licenses/LICENSE" in n], "LICENSE missing from dist-info"
+          assert not [n for n in names if n.startswith("tests/")], "tests leaked into the wheel"
+          print(f"wheel: {len(names)} entries")
+          PY
+      - name: Installs into an empty environment
+        run: |
+          python -m venv /tmp/pluggable
+          /tmp/pluggable/bin/python -m pip install --no-deps --no-index dist/*.whl
+          /tmp/pluggable/bin/python -c "import snakemake_storage_plugin_acadfetch as p; print(p.StorageProvider.__name__)"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: plugin-dist
+          path: dist/
