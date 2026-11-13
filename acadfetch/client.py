@@ -325,6 +325,26 @@ class Client:
                 return {}
             raise
 
+    def available(self, url: str) -> bool:
+        """Whether the URL answers at all — the question a cache asks before fetching.
+
+        A HEAD is cheap, but ``head()`` folds 403/405/501 into "no headers", which
+        is indistinguishable from a 200 that sent none. So an empty answer is
+        settled with a one-byte range request instead of being read as success:
+        guessing wrong here makes a cache believe a file exists when it does not,
+        or refetch one that is fine.
+        """
+        try:
+            if self.head(url):
+                return True
+        except HttpError:
+            return False
+        try:
+            with self.open(url, {"Range": "bytes=0-0"}, attempts=1):
+                return True
+        except HttpError:
+            return False
+
 
 def _snippet(exc: urllib.error.HTTPError) -> str:
     try:

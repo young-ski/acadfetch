@@ -40,8 +40,32 @@ manifest looks like. Add `ZENODO_TOKEN` from a secret for restricted records.
 
 ## Snakemake
 
-No storage plugin yet; a rule that shells out is enough, and `-w` avoids
-re-downloading through another process:
+There is a storage plugin, `snakemake-storage-plugin-acadfetch` (in this
+repository under `snakemake-storage-plugin-acadfetch/`). A rule names a file URL —
+the form `acadfetch fetch <target> -w -` prints — and gets acadfetch's transport:
+one token bucket, `Retry-After`, retried 5xx and block pages, a resumed `.part`.
+
+```snakemake
+rule fetch:
+    input:
+        storage.acadfetch("https://zenodo.org/records/123456/files/raw.tar.gz")
+    output:
+        "raw.tar.gz"
+    shell:
+        "cp {input} {output}"
+```
+
+Until it has a PyPI release, install it from this checkout:
+
+```bash
+pip install "git+https://github.com/young-ski/acadfetch.git#subdirectory=snakemake-storage-plugin-acadfetch"
+```
+
+`--storage-acadfetch-rate`, `-retries`, `-timeout` and `-header` tune it the way
+the CLI flags of the same name do.
+
+For a whole record with a manifest beside it, a rule that shells out is still the
+simpler thing:
 
 ```python
 rule dataset:
@@ -51,8 +75,8 @@ rule dataset:
         shell("acadfetch verify {output}/manifest.json")
 ```
 
-Pooch exports are covered below; a BagIt export is not implemented — the manifest
-already carries what it would need, so it is a thin wrapper away.
+Pooch is covered below; a BagIt export is not implemented — the manifest already
+carries what it would need, so it is a thin wrapper away.
 
 ## Pooch
 

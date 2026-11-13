@@ -35,12 +35,10 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from . import atomic
 from .client import Client
 from .consts import DEFAULT_RATE, DEFAULT_RETRIES, DEFAULT_TIMEOUT
-from .downloader import CHUNK, Options, fetch_file
-from .errors import AcFError, HttpError, TargetError
-from .sources.base import File
+from .downloader import CHUNK, fetch_one
+from .errors import TargetError
 
 __all__ = ["Downloader", "downloader"]
 
@@ -100,46 +98,18 @@ class Downloader:
             return None
 
         target = Path(output_file)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        result = fetch_file(
+        fetch_one(
             self._client(),
-            File(url=url, name=target.name),
-            Options(
-                out=target.parent,
-                concurrency=1,
-                retries=self.retries,
-                fsync=self.fsync,
-            ),
-            set(),
+            url,
+            target,
+            retries=self.retries,
+            fsync=self.fsync,
         )
-        if result.state == "failed":
-            # pooch does not catch this, so the sentence the CLI would print is
-            # the sentence the caller sees.
-            raise AcFError(result.error or f"could not fetch {url}")
-        produced = Path(result.path or target)
-        if produced != target:
-            # `naming` is allowed to change a name; pooch's own file must win.
-            atomic.replace(produced, target)
         return None
 
     def available(self, url: str) -> bool:
-        """Whether the URL answers at all — HEAD first, one ranged byte after.
-
-        ``Client.head`` treats a 403/405/501 as "no headers", which is
-        indistinguishable from a 200 that sent none, so an empty answer falls
-        through to a one-byte range request rather than being read as success.
-        """
-        client = self._client()
-        try:
-            if client.head(url):
-                return True
-        except HttpError:
-            return False
-        try:
-            with client.open(url, {"Range": "bytes=0-0"}, attempts=1):
-                return True
-        except HttpError:
-            return False
+        """Whether the URL answers at all; see :meth:`acadfetch.client.Client.available`."""
+        return self._client().available(url)
 
     def _stream(self, url: str, handle: Any) -> None:
         client = self._client()

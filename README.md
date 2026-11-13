@@ -306,9 +306,8 @@ honest way to test this code path.
 ## Getting involved
 
 A [30-second tour](docs/demo.md) shows the whole loop, and
-[docs/integrations.md](docs/integrations.md) has Make, CI, aria2, Snakemake and a
-pooch downloader
-recipes.
+[docs/integrations.md](docs/integrations.md) has Make, CI, aria2, a Snakemake
+storage plugin and a pooch downloader.
 
 A nightly job downloads three fixed public records and verifies them, so a
 rotted adapter opens an issue before a user reports one. It never blocks a

@@ -32,7 +32,7 @@ from typing import Any, cast
 from . import atomic, debug, naming, verify
 from .client import Client
 from .consts import CHUNK
-from .errors import HttpError, LocalError, PartialError, TargetError
+from .errors import AcFError, HttpError, LocalError, PartialError, TargetError
 from .progress import Progress
 from .sources.base import File, Record, Result
 from .units import human
@@ -1006,3 +1006,36 @@ def check_total(record: Record, limit: int) -> None:
         from .errors import SourceError
 
         raise SourceError(f"record is {human(total)}, over --max-size ({human(limit)})")
+
+
+def fetch_one(
+    client: Client,
+    url: str,
+    target: Path,
+    *,
+    retries: int = TRANSFER_ATTEMPTS,
+    fsync: bool = True,
+) -> None:
+    """Download ``url`` to exactly ``target``, raising instead of returning a row.
+
+    The CLI reports a row per file because one bad file must not hide the rest; a
+    library caller, by contrast, wants an exception and no partial result. The
+    pooch downloader and the Snakemake plugin both ask this question, so they ask
+    it here rather than each rebuilding the row-to-exception translation.
+
+    The name on disk is the caller's, not the repository's: if ``naming`` had to
+    rewrite it, the produced file is moved back to what was asked for.
+    """
+    target = Path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    result = fetch_file(
+        client,
+        File(url=url, name=target.name),
+        Options(out=target.parent, concurrency=1, retries=retries, fsync=fsync),
+        set(),
+    )
+    if result.state == "failed":
+        raise AcFError(result.error or f"could not fetch {url}")
+    produced = Path(result.path or target)
+    if produced != target:
+        atomic.replace(produced, target)

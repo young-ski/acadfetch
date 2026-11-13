@@ -7,6 +7,25 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-13
+
+### Added
+
+- `acadfetch.downloader.fetch_one` and `Client.available`: the two questions every
+  library caller asks. `fetch_one` downloads one URL to an exact path and raises
+  instead of returning a row — the CLI wants a row per file so one bad file cannot
+  hide the rest, a library wants an exception. `Client.available` answers "is this
+  URL there", settling an ambiguous HEAD (403/405/501 arrive as "no headers") with
+  a one-byte range request rather than guessing.
+
+  Both had already been written twice, once in the pooch downloader and once in
+  the new Snakemake storage plugin; they live in the core now so the two cannot
+  drift.
+
+### Changed
+
+- The pooch downloader delegates to them and is shorter for it.
+
 ## [0.7.0] - 2026-11-12
 
 ### Added
