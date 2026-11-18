@@ -7,6 +7,19 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-18
+
+### Added
+
+- `acadfetch batch FILE`: one identifier per line, downloaded one after another,
+  with the identifiers that failed written to `failed.txt` (or `--failed-out`),
+  verbatim and one per line — so the retry is `acadfetch batch failed.txt` and
+  nothing is lost between runs. Blank lines and `#` comments are skipped; a bad
+  line never stops the rest; each identifier still gets its own directory under
+  `-o`; and an interrupt puts the lines that were never attempted on the list
+  too. `--json` emits one document with a row per identifier. Exit codes keep
+  their meaning (`0`/`1`/`2`/`130`).
+
 ## [0.7.2] - 2026-11-13
 
 ### Changed
