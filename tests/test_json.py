@@ -59,7 +59,14 @@ def test_json_is_one_document_and_progress_goes_to_stderr(served, capsys, tmp_pa
     assert doc["files"][0]["verified"] is None
     assert doc["files"][0]["verified_reason"] == "no-checksum-published"
     assert doc["files"][0]["part"] is None
-    assert doc["summary"] == {"total": 2, "downloaded": 2, "skipped": 0, "failed": 0, "ok": True}
+    assert doc["summary"] == {
+        "total": 2,
+        "downloaded": 2,
+        "skipped": 0,
+        "failed": 0,
+        "unmatched": 0,
+        "ok": True,
+    }
     assert doc["elapsed_s"] >= 0
     assert "2 file(s)" in err, "progress belongs on stderr, not in the document"
 
@@ -134,7 +141,14 @@ def test_json_failure_keeps_the_part_and_names_it(served, capsys, tmp_path):
     assert row["part"] == "a.bin.part"
     assert row["bytes"] == 4000
     assert (tmp_path / "a.bin.part").exists()
-    assert doc["summary"] == {"total": 1, "downloaded": 0, "skipped": 0, "failed": 1, "ok": False}
+    assert doc["summary"] == {
+        "total": 1,
+        "downloaded": 0,
+        "skipped": 0,
+        "failed": 1,
+        "unmatched": 0,
+        "ok": False,
+    }
 
 
 def test_verify_json_flags_a_tampered_file(capsys, tmp_path):

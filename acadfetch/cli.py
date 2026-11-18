@@ -309,13 +309,13 @@ def _write_urls(files, out_dir, target) -> None:  # noqa: ANN001
     print(f"{len(files)} url(s) -> {target}", file=sys.stderr)
 
 
-def _no_match(record, args, emit: bool = True) -> int:  # noqa: ANN001
+def _no_match(record, args, names, emit: bool = True) -> int:  # noqa: ANN001
     """A filter that matched nothing is a failure that can name the candidates."""
     available = ", ".join(naming.sanitize(f.name) for f in record.files[:8]) or "(none)"
     wanted = " ".join(
         part
         for part in (
-            f"--only {', '.join(args.only)}" if args.only else "",
+            f"--only {_few(names)}" if names else "",
             f"--glob {', '.join(args.globs)}" if args.globs else "",
         )
         if part
@@ -327,14 +327,55 @@ def _no_match(record, args, emit: bool = True) -> int:  # noqa: ANN001
     return EXIT_FAIL
 
 
-def _selected(record, args):  # noqa: ANN001, ANN202
-    if not args.only and not args.globs:
+def _few(names: list[str], limit: int = 8) -> str:
+    """A name list short enough for one line, without hiding that it is long."""
+    shown = ", ".join(naming.sanitize(n) for n in names[:limit])
+    return shown + (f" (+{len(names) - limit} more)" if len(names) > limit else "")
+
+
+def _requested_names(args: argparse.Namespace) -> list[str]:
+    """The union of ``--only`` and ``--only-file``, in order, case-insensitively.
+
+    ``--only-file`` is the same filter with its names in a file: an exact name
+    with spaces does not have to survive shell quoting, and the file that lists
+    failures can be handed straight back.
+    """
+    names: list[str] = []
+    seen: set[str] = set()
+    for name in list(args.only or []) + (
+        [item for _, item in _read_list(Path(args.only_file))] if args.only_file else []
+    ):
+        key = name.lower()
+        if key not in seen:
+            seen.add(key)
+            names.append(name)
+    return names
+
+
+def _selected(record, names: list[str], globs: list[str] | None):  # noqa: ANN001, ANN202
+    if not names and not globs:
         return record.files
-    return [f for f in record.files if downloader_matches(f, args.only, args.globs)]
+    return [f for f in record.files if downloader_matches(f, names, globs)]
 
 
 def cmd_fetch(args: argparse.Namespace) -> int:
+    if args.json and args.failed_out == "-":
+        raise TargetError("--json claims stdout; write --failed-out to a file")
+    args.failed_names = []
     code, _ = _fetch_one(args, _client(args))
+    if args.failed_out and not args.urls:
+        # Selection order, not failure order: the file is meant to be read and
+        # re-fed, and shuffling it turns a retry into a puzzle.
+        failed = set(args.failed_names)
+        order = [name for name in getattr(args, "names", []) if name in failed]
+        order += [name for name in args.failed_names if name not in set(order)]
+        try:
+            _write_failed(Path(args.failed_out), order)
+        except OSError as exc:
+            # The download stands; only the retry list is missing.
+            print(f"acadfetch: could not write {args.failed_out}: {exc}", file=sys.stderr)
+            if code == EXIT_OK:
+                code = EXIT_PARTIAL
     return code
 
 
@@ -362,14 +403,38 @@ def _fetch_one(args: argparse.Namespace, client: Client, emit: bool = True) -> t
         license=record.license,
         landing=_hide(record.landing, args),
     )
-    # A URL list on stdout must stay machine-readable, so the header and the
-    # token line move to stderr for --urls.
-    header = sys.stderr if args.urls else sys.stdout
-    if not args.json:
+    # A URL list or a name list on stdout must stay machine-readable, so the
+    # header and the token line move to stderr there — and ``--list-files`` is
+    # meant to be redirected straight into a selection file.
+    header = sys.stderr if args.urls or args.list_files else sys.stdout
+    if not args.json and not args.list_files:
         _print_header(record, lambda value: _hide(value, args), stream=header)
     token = _token_for(args, record)
-    if token and not args.json:
+    if token and not args.json and not args.list_files:
         print(f"auth    : token from {token}", file=header)
+
+    if args.list_files:
+        if args.json:
+            raise TargetError("--list-files writes names; drop --json")
+        for file in record.files:
+            print(naming.sanitize(file.name))
+        return EXIT_OK, doc
+
+    names = _requested_names(args)
+    args.names = names
+    chosen = _selected(record, names, args.globs)
+    # A typo in a selection file is not silently "you asked for fewer files".
+    published = {f.name.lower() for f in record.files}
+    unmatched = [n for n in names if n.lower() not in published]
+    if unmatched:
+        failed_names = getattr(args, "failed_names", None)
+        if failed_names is not None:
+            failed_names.extend(unmatched)
+        if chosen:
+            print(
+                f"acadfetch: {len(unmatched)} selected name(s) matched nothing: {_few(unmatched)}",
+                file=sys.stderr,
+            )
 
     # A batch passes its base directory in -o: every identifier still gets a
     # directory of its own, because two records must not share one.
@@ -381,13 +446,13 @@ def _fetch_one(args: argparse.Namespace, client: Client, emit: bool = True) -> t
         out_dir = Path(f"acadfetch-out/{record.source}-{_slug(record)}")
     doc["out"] = str(out_dir)
     doc["dry_run"] = bool(args.dry_run)
+    doc["unmatched"] = [naming.sanitize(n) for n in unmatched]
 
     if args.urls:
         if args.json:
             raise TargetError("--urls writes a text list; drop --json")
-        chosen = _selected(record, args)
         if not chosen:
-            return _no_match(record, args, emit), doc
+            return _no_match(record, args, names, emit), doc
         _write_urls(chosen, out_dir, args.urls)
         return EXIT_OK, doc
     # Say whether a credential was stripped, so a script can tell the manifest
@@ -410,9 +475,8 @@ def _fetch_one(args: argparse.Namespace, client: Client, emit: bool = True) -> t
     )
 
     if args.dry_run:
-        chosen = _selected(record, args)
         if not chosen:
-            return _no_match(record, args, emit), doc
+            return _no_match(record, args, names, emit), doc
         if args.max_size:
             check_total(replace(record, files=chosen), args.max_size)
         try:
@@ -457,19 +521,28 @@ def _fetch_one(args: argparse.Namespace, client: Client, emit: bool = True) -> t
         return EXIT_OK, doc
 
     try:
-        results = fetch_record(record, opts, client, only=args.only, globs=args.globs)
+        results = fetch_record(record, opts, client, only=names, globs=args.globs)
     except PartialError:
-        return _no_match(record, args, emit), doc
+        return _no_match(record, args, names, emit), doc
+    except KeyboardInterrupt:
+        # The engine normally turns Ctrl-C into a failed row; a stub or a
+        # surprise between files still has to leave a usable manifest behind.
+        opts.interrupted = True
+        results = []
     finally:
         progress.finish()
 
     failures = [r for r in results if not r.ok]
+    failed_names = getattr(args, "failed_names", None)
+    if failed_names is not None:
+        failed_names.extend(r.file.name for r in failures)
     doc["files"] = [_file_row(r, redact=not args.record_full_url) for r in results]
     doc["summary"] = {
         "total": len(results),
         "downloaded": sum(1 for r in results if r.state == "downloaded"),
         "skipped": sum(1 for r in results if r.state == "skipped"),
         "failed": len(failures),
+        "unmatched": len(unmatched),
     }
     doc["elapsed_s"] = round(time.monotonic() - started, 3)
     for row in results if not args.json else []:
@@ -493,7 +566,7 @@ def _fetch_one(args: argparse.Namespace, client: Client, emit: bool = True) -> t
         token,
         # Which files this run asked for: a --only run must not look like a
         # run that fetched everything and then lost most of it.
-        selected_ids={id(f) for f in _selected(record, args)},
+        selected_ids={id(f) for f in chosen},
         redact=not args.record_full_url,
     )
     code = EXIT_OK
@@ -520,10 +593,19 @@ def _fetch_one(args: argparse.Namespace, client: Client, emit: bool = True) -> t
         # The manifest above covers whatever finished, which is the difference
         # between "a partial run you can reason about" and a bare exit 130.
         print("interrupted - partial files kept, rerun to resume", file=sys.stderr)
+        if failed_names is not None:
+            # What the interrupt skipped is still owed: a retry list that stops
+            # at the current file would quietly drop the rest of the selection.
+            touched = {id(r.file) for r in results}
+            failed_names.extend(f.name for f in chosen if id(f) not in touched)
         code = EXIT_INTERRUPT
     elif failures and len(failures) == len(results):
         code = EXIT_FAIL
     elif failures:
+        code = EXIT_PARTIAL
+    elif unmatched:
+        # Some selected names never resolved; the bytes that did arrive are fine,
+        # but the selection was not fully honoured.
         code = EXIT_PARTIAL
     doc["summary"]["ok"] = code == EXIT_OK
     if emit and args.json:
@@ -667,21 +749,25 @@ def _slug(record) -> str:  # noqa: ANN001
     return f"{host}-{digest}-{name}"
 
 
-def _read_identifiers(path: Path) -> list[tuple[int, str]]:
+def _read_list(path: Path) -> list[tuple[int, str]]:
     """Non-blank, non-comment lines, with the line number they came from.
 
     ``utf-8-sig`` because a Windows editor happily adds a BOM, and a BOM on the
-    first identifier otherwise makes exactly that one unresolvable. ``#`` starts
-    a comment so a list can carry notes and still be fed back as a retry list.
+    first line otherwise makes exactly that one unresolvable. ``#`` starts a
+    comment so a list can carry notes and still be fed back as a retry list.
+    ``-`` reads stdin, so a selection can also be piped in.
     """
-    try:
-        text = path.read_text("utf-8-sig")
-    except FileNotFoundError:
-        raise TargetError(f"no such identifiers file: {path}") from None
-    except IsADirectoryError:
-        raise TargetError(f"{path} is a directory") from None
-    except UnicodeDecodeError as exc:
-        raise TargetError(f"{path} is not UTF-8: {exc}") from None
+    if str(path) == "-":
+        text = sys.stdin.read()
+    else:
+        try:
+            text = path.read_text("utf-8-sig")
+        except FileNotFoundError:
+            raise TargetError(f"no such list file: {path}") from None
+        except IsADirectoryError:
+            raise TargetError(f"{path} is a directory") from None
+        except UnicodeDecodeError as exc:
+            raise TargetError(f"{path} is not UTF-8: {exc}") from None
     return [
         (number, item)
         for number, line in enumerate(text.splitlines(), 1)
@@ -720,6 +806,7 @@ def cmd_batch(args: argparse.Namespace) -> int:
     # _fetch_one reads both; neither is a batch-level decision any more.
     args.urls = None
     args.manifest_out = None
+    args.list_files = False
     if args.json and args.failed_out == "-":
         raise TargetError("--json claims stdout; write --failed-out to a file")
     base = args.out or "acadfetch-out"
@@ -727,7 +814,7 @@ def cmd_batch(args: argparse.Namespace) -> int:
     doc.update(identifiers=str(source_path), out=base, failed_out=str(failed_path))
     items: list[dict] = []
     doc["items"] = items
-    entries = _read_identifiers(source_path)
+    entries = _read_list(source_path)
     summary = doc["summary"] = {
         "total": len(entries),
         "ok": 0,
@@ -963,6 +1050,12 @@ def build_parser() -> argparse.ArgumentParser:
             help="fetch only these file names",
         )
         p.add_argument(
+            "--only-file",
+            metavar="PATH",
+            help="fetch only the names listed in this file, one per line (blank lines "
+            "and '#' comments are skipped; '-' is stdin); combines with --only",
+        )
+        p.add_argument(
             "--glob",
             nargs="+",
             dest="globs",
@@ -1013,6 +1106,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="DOI, zenodo:<id>, arxiv:<id>, or URL",
     )
     transfer_flags(fetch)
+    fetch.add_argument(
+        "--list-files",
+        action="store_true",
+        help="print the record's file names, one per line, and exit",
+    )
+    fetch.add_argument(
+        "--failed-out",
+        metavar="PATH",
+        help="write the selected names that failed here, one per line, as a "
+        "--only-file for the rerun; '-' is stdout",
+    )
     network_flags(fetch)
     fetch.set_defaults(func=cmd_fetch)
 

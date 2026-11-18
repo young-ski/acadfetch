@@ -32,12 +32,18 @@ Added to the envelope:
 | `out` | string | Output directory. |
 | `dry_run` | bool | `true` for `-n`: no bytes were moved. |
 | `url_redacted` | bool | A credential query parameter was stripped; `--record-full-url` keeps it and sets this to `false`. |
+| `unmatched` | array | Selected names (`--only` / `--only-file`) that matched no file, in selection order; each one also sets `summary.unmatched` and makes the run partial. |
 | `files` | array | One row per selected file. |
-| `summary` | object | `total`, `downloaded`, `skipped`, `failed`, and `ok` (`true` only on exit `0`). |
+| `summary` | object | `total`, `downloaded`, `skipped`, `failed`, `unmatched`, and `ok` (`true` only on exit `0`). |
 | `elapsed_s` | float | Wall clock, seconds. |
 
 A dry run adds `disk` (`free`, `needed`, and `ok` when the plan does not fit),
 and its `summary` has no `ok`.
+
+A selected name that matches nothing is not silently dropped: it is reported on
+stderr, listed in `unmatched`, and leaves the run at exit `2` even when every
+matched file downloaded. `--list-files` (which refuses `--json`) prints the
+record's names, one per line, for a `--only-file` selection.
 
 ### `fetch` file rows
 

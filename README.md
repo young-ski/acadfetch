@@ -108,6 +108,24 @@ nothing, rather than saving the block page as a PDF. If you hit that, the file
 itself is fine; see the `403` section of
 [docs/troubleshooting.md](docs/troubleshooting.md).
 
+### Picking a few files out of many
+
+A record with 70 files rarely wants all of them. `--list-files` prints the names
+and transfers nothing; edit the list, then feed it back:
+
+```bash
+acadfetch fetch 10.5281/zenodo.19665762 --list-files > want.txt
+acadfetch fetch 10.5281/zenodo.19665762 --only-file want.txt --failed-out failed.txt
+acadfetch fetch 10.5281/zenodo.19665762 --only-file failed.txt   # retry the misses
+```
+
+`--only-file` takes one exact name per line (blank lines and `#` comments are
+skipped, `-` reads stdin, names are case-insensitive); it combines with `--only`
+and is narrowed by `--glob`. `--failed-out` writes the selected names that could
+not be fetched, verbatim and in selection order, replacing the file even when
+nothing failed. A name that matches nothing is a failure, not a quietly smaller
+download: it is named on stderr, written to the list, and the run exits `2`.
+
 figshare was removed in 0.2.0: pass the article's download URL instead, and
 [`--checksum`](docs/migration-0.2.md) keeps the verification the API used to
 give you.
@@ -404,6 +422,20 @@ acadfetch batch identifiers.txt -o ./data --failed-out todo.txt
 `--failed-out`），重跑就是 `acadfetch batch failed.txt`；没失败也会清空该文件，
 不会留下上次的假清单。退出码含义不变：`0` 全成、`1` 全败、`2` 部分、`130`
 被中断 —— 中断时还没轮到的行也会进清单。
+
+单个记录里只挑几个文件时，用 `--list-files` 取名单（只打印名字、不传字节），再
+用 `--only-file` 喂回去：
+
+```bash
+acadfetch fetch 10.5281/zenodo.19665762 --list-files > want.txt
+acadfetch fetch 10.5281/zenodo.19665762 --only-file want.txt --failed-out failed.txt
+acadfetch fetch 10.5281/zenodo.19665762 --only-file failed.txt   # 重试漏掉的
+```
+
+名单一行一个文件名，空行与 `#` 注释跳过，`-` 读标准输入，名字不区分大小写；可与
+`--only` 合并、再被 `--glob` 收窄。写错的名单算失败：stderr 会点名、会进清单、退出
+码是 `2`，不会被悄悄跳过。注意 `batch` 的 `--failed-out` 记的是目标，`fetch` 的记的
+是文件名。
 
 ### 它替你保住的东西
 
