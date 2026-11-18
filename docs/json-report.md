@@ -1,8 +1,9 @@
 # The `--json` report
 
-`fetch --json` and `verify --json` put exactly one JSON document on stdout and
-move everything else to stderr, so `acadfetch … --json | jq` never has to filter
-prose. A failure before any transfer still yields a document, with `error` set.
+`fetch --json`, `batch --json` and `verify --json` put exactly one JSON document
+on stdout and move everything else to stderr, so `acadfetch … --json | jq` never
+has to filter prose. A failure before any transfer still yields a document, with
+`error` set.
 
 `report` is the document's schema version. Fields are **added**, never removed
 or given a new meaning; `state` may gain values, so treat an unknown one as
@@ -15,7 +16,7 @@ non-terminal. Version `2` is current; `1` named the same things without
 | --- | --- | --- |
 | `tool` | object | `{"name": "acadfetch", "version": …}` |
 | `report` | int | Schema version, `2`. |
-| `command` | string | `fetch` or `verify`. |
+| `command` | string | `fetch`, `batch` or `verify`. |
 | `started_at` | RFC 3339 | When the run began, UTC. |
 | `error` | string \| null | Set when the run died before or outside the row list. |
 
@@ -54,6 +55,35 @@ and its `summary` has no `ok`.
 | `resumed_from` | int | Bytes already on disk when this run started — not where an internal retry picked up. |
 | `part` | string \| null | Base name of the kept `.part`, when a failure left one. |
 | `error` | string | Empty on success. |
+
+## `batch` document
+
+Added to the envelope:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `identifiers` | string | The list that was read. |
+| `out` | string | Base output directory. |
+| `failed_out` | string | Where the retry list is written. |
+| `items` | array | One row per identifier, in list order. |
+| `summary` | object | `total`, `ok`, `failed`, `interrupted`, and `ok_run` (`true` only on exit `0`). |
+| `elapsed_s` | float | Wall clock, seconds. |
+
+### `batch` rows
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `line` | int | 1-based line in the list. |
+| `target` | string | The identifier, credentials redacted — `failed.txt` keeps it verbatim. |
+| `code` | int | That identifier's own exit code (`0`, `1`, `2`, `130`). |
+| `ok` | bool | `true` when `code` is `0`. |
+| `out` | string \| null | Its output directory; `null` when it failed before resolving. |
+| `error` | string \| null | Why it failed. `not attempted` marks the lines after an interrupt. |
+| `report` | object \| null | The complete `fetch` document for that identifier; `null` when it never ran. |
+
+`--failed-out -` is refused together with `--json`: the document owns stdout,
+and the failing rows are already in it. An interrupt lists the current line and
+every line after it as failed, so the retry list is complete.
 
 ## `verify` document
 
@@ -106,4 +136,7 @@ acadfetch verify data/manifest.json --against-remote --json \
 
 # fail the shell on a partial run
 acadfetch fetch … --json >/tmp/r.json || case $? in 2) echo partial >&2; exit 1;; esac
+
+# what still needs a retry (the file is authoritative: it is not redacted)
+acadfetch batch identifiers.txt --json | jq -r '.items[] | select(.ok == false) | .target'
 ```

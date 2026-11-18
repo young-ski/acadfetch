@@ -83,6 +83,23 @@ acadfetch fetch arxiv:1706.03762               # an arXiv id
 acadfetch fetch https://ndownloader.figshare.com/files/70600233/report.pdf  # any URL
 ```
 
+Or a whole list, with the failures kept for the next run:
+
+```bash
+acadfetch batch identifiers.txt                # one identifier per line
+acadfetch batch identifiers.txt -o ./data --failed-out todo.txt
+```
+
+Blank lines and `#` comments are skipped, so a list can carry notes. Every
+identifier still gets a directory of its own under `-o` (default
+`acadfetch-out`); one bad line does not stop the rest, and the identifiers that
+failed land in `failed.txt` (or `--failed-out`), verbatim and one per line — so
+the retry is `acadfetch batch failed.txt`. The file is replaced even when
+nothing failed, so a stale list never lies. Exit codes keep their meaning: `0`
+all ok, `1` all failed, `2` partial, `130` interrupted, and an interrupt puts the
+lines that were never attempted on the list too. Records are attempted one after
+another; `-j` still applies inside a record.
+
 The first two are answered by Zenodo and arXiv and work from any network those
 are reachable on. The third is a direct URL, so the host decides: figshare's CDN
 answers 403 with a WAF block page from some networks — the same behaviour that
@@ -157,7 +174,8 @@ checksum matches, so an interrupted or failed run never leaves something that
 it resumes. The one case where a run must start over is a server that ignores
 `Range`; the bytes already on disk are then moved aside and kept until a whole
 new copy has arrived, so a restart that dies early costs nothing. `acadfetch-out/`
-is worth adding to a project's `.gitignore`; this repository already has it.
+is worth adding to a project's `.gitignore`; this repository already has it, and
+names the default `failed.txt` there as well.
 
 The default directory names the target, not only its filename — `data.csv` from
 two hosts is two datasets, and they do not share a directory. A file already
@@ -373,6 +391,19 @@ acadfetch verify ./data/manifest.json          # 事后复验；对不上就非�
 > 直链成败由对方主机决定：figshare 的 CDN 在某些网络会回 403 拦截页（当年删掉
 > figshare 适配器正是因为这个）。acadfetch 会明说这是拦截页、而不是把 HTML 存成
 > PDF，并把下一条命令给你。
+
+批量清单则一条一条来，失败的留下：
+
+```bash
+acadfetch batch identifiers.txt                # 每行一个目标
+acadfetch batch identifiers.txt -o ./data --failed-out todo.txt
+```
+
+空行与 `#` 注释会被跳过；每个目标仍在 `-o`（默认 `acadfetch-out`）下拿到自己
+的目录，一行坏掉不影响其余。失败的目标原样写进 `failed.txt`（或
+`--failed-out`），重跑就是 `acadfetch batch failed.txt`；没失败也会清空该文件，
+不会留下上次的假清单。退出码含义不变：`0` 全成、`1` 全败、`2` 部分、`130`
+被中断 —— 中断时还没轮到的行也会进清单。
 
 ### 它替你保住的东西
 

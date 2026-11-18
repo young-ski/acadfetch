@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import NoReturn
 from urllib.parse import urlsplit
 
-from . import auth, consts, debug, manifest, naming, urls, verify
+from . import atomic, auth, consts, debug, manifest, naming, urls, verify
 from . import remote as remote_check
 from .client import Client
 from .downloader import Options, check_disk, check_total, fetch_record, human
@@ -183,8 +183,11 @@ def _recover_target(args: argparse.Namespace) -> None:
     """``--only a.pdf <target>`` makes argparse eat the target; put it back.
 
     Checked only when the target is missing, so a file that happens to look
-    like an id keeps working as long as the target is spelled out.
+    like an id keeps working as long as the target is spelled out. ``batch``
+    has no positional target, so its ``--only`` must not be mistaken for one.
     """
+    if getattr(args, "command", "") != "fetch":
+        return
     if getattr(args, "target", None) is not None or not getattr(args, "only", None):
         return
     if len(args.only) > 1 and _looks_like_target(args.only[-1]):
@@ -306,7 +309,7 @@ def _write_urls(files, out_dir, target) -> None:  # noqa: ANN001
     print(f"{len(files)} url(s) -> {target}", file=sys.stderr)
 
 
-def _no_match(record, args) -> int:  # noqa: ANN001
+def _no_match(record, args, emit: bool = True) -> int:  # noqa: ANN001
     """A filter that matched nothing is a failure that can name the candidates."""
     available = ", ".join(naming.sanitize(f.name) for f in record.files[:8]) or "(none)"
     wanted = " ".join(
@@ -319,7 +322,8 @@ def _no_match(record, args) -> int:  # noqa: ANN001
     )
     message = f"no file matched {wanted}; available: {available}"
     print(f"acadfetch: {message}", file=sys.stderr)
-    _emit_error(args, message)
+    if emit:
+        _emit_error(args, message)
     return EXIT_FAIL
 
 
@@ -330,8 +334,17 @@ def _selected(record, args):  # noqa: ANN001, ANN202
 
 
 def cmd_fetch(args: argparse.Namespace) -> int:
+    code, _ = _fetch_one(args, _client(args))
+    return code
+
+
+def _fetch_one(args: argparse.Namespace, client: Client, emit: bool = True) -> tuple[int, dict]:
+    """Resolve and fetch one target. Returns the exit code and the report.
+
+    ``emit`` is false when the caller owns stdout (``batch``): it collects these
+    documents and prints one of its own at the end.
+    """
     started = time.monotonic()
-    client = _client(args)
     record = _resolve(args, client)
     if args.checksum:
         # Explicit wins over whatever the source published, and over nothing.
@@ -340,6 +353,8 @@ def cmd_fetch(args: argparse.Namespace) -> int:
             files=[replace(f, checksum=args.checksum, checksum_source="cli") for f in record.files],
         )
     doc = _report(args)
+    # The document keeps its shape even when the caller is a batch.
+    doc["command"] = "fetch"
     doc.update(
         target=_hide(record.target, args),
         source=record.source,
@@ -356,7 +371,14 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     if token and not args.json:
         print(f"auth    : token from {token}", file=header)
 
-    out_dir = Path(args.out or f"acadfetch-out/{record.source}-{_slug(record)}")
+    # A batch passes its base directory in -o: every identifier still gets a
+    # directory of its own, because two records must not share one.
+    if args.out and getattr(args, "command", "") == "batch":
+        out_dir = Path(args.out) / f"{record.source}-{_slug(record)}"
+    elif args.out:
+        out_dir = Path(args.out)
+    else:
+        out_dir = Path(f"acadfetch-out/{record.source}-{_slug(record)}")
     doc["out"] = str(out_dir)
     doc["dry_run"] = bool(args.dry_run)
 
@@ -365,9 +387,9 @@ def cmd_fetch(args: argparse.Namespace) -> int:
             raise TargetError("--urls writes a text list; drop --json")
         chosen = _selected(record, args)
         if not chosen:
-            return _no_match(record, args)
+            return _no_match(record, args, emit), doc
         _write_urls(chosen, out_dir, args.urls)
-        return EXIT_OK
+        return EXIT_OK, doc
     # Say whether a credential was stripped, so a script can tell the manifest
     # is not replayable as-is.
     doc["url_redacted"] = record.target != _hide(record.target, args) or record.landing != _hide(
@@ -390,7 +412,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     if args.dry_run:
         chosen = _selected(record, args)
         if not chosen:
-            return _no_match(record, args)
+            return _no_match(record, args, emit), doc
         if args.max_size:
             check_total(replace(record, files=chosen), args.max_size)
         try:
@@ -418,8 +440,9 @@ def cmd_fetch(args: argparse.Namespace) -> int:
             doc["disk"] = disk
             doc["summary"] = {"total": len(chosen), "downloaded": 0, "skipped": 0, "failed": 0}
             doc["elapsed_s"] = round(time.monotonic() - started, 3)
-            _emit(doc)
-            return EXIT_OK
+            if emit:
+                _emit(doc)
+            return EXIT_OK, doc
         print(f"would write to {out_dir}")
         if needed:
             print(
@@ -431,12 +454,12 @@ def cmd_fetch(args: argparse.Namespace) -> int:
             # size, so say that instead of printing a question mark.
             size = human(file.size) if file.size is not None else "size not published"
             print(f"  would fetch {naming.sanitize(file.name)} ({size})")
-        return EXIT_OK
+        return EXIT_OK, doc
 
     try:
         results = fetch_record(record, opts, client, only=args.only, globs=args.globs)
     except PartialError:
-        return _no_match(record, args)
+        return _no_match(record, args, emit), doc
     finally:
         progress.finish()
 
@@ -503,9 +526,9 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     elif failures:
         code = EXIT_PARTIAL
     doc["summary"]["ok"] = code == EXIT_OK
-    if args.json:
+    if emit and args.json:
         _emit(doc)
-    return code
+    return code, doc
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
@@ -644,6 +667,176 @@ def _slug(record) -> str:  # noqa: ANN001
     return f"{host}-{digest}-{name}"
 
 
+def _read_identifiers(path: Path) -> list[tuple[int, str]]:
+    """Non-blank, non-comment lines, with the line number they came from.
+
+    ``utf-8-sig`` because a Windows editor happily adds a BOM, and a BOM on the
+    first identifier otherwise makes exactly that one unresolvable. ``#`` starts
+    a comment so a list can carry notes and still be fed back as a retry list.
+    """
+    try:
+        text = path.read_text("utf-8-sig")
+    except FileNotFoundError:
+        raise TargetError(f"no such identifiers file: {path}") from None
+    except IsADirectoryError:
+        raise TargetError(f"{path} is a directory") from None
+    except UnicodeDecodeError as exc:
+        raise TargetError(f"{path} is not UTF-8: {exc}") from None
+    return [
+        (number, item)
+        for number, line in enumerate(text.splitlines(), 1)
+        if (item := line.strip()) and not item.startswith("#")
+    ]
+
+
+def _write_failed(path: Path, targets: list[str]) -> None:
+    """Replace the failure list, whole and one identifier per line.
+
+    Written even when nothing failed: an empty file says "nothing to retry",
+    and last run's list would say the opposite. Same-name ``.part`` then a
+    replace, so a crash never leaves half a list that reads as complete.
+    """
+    text = "".join(f"{target}\n" for target in targets)
+    if str(path) == "-":
+        sys.stdout.write(text)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".part")
+    tmp.write_text(text, "utf-8")
+    atomic.replace(tmp, path)
+
+
+def cmd_batch(args: argparse.Namespace) -> int:
+    """Fetch every identifier of a file; keep the failures for the next run.
+
+    One bad identifier is one line of output, not the end of the run. The exit
+    code keeps its meaning: 0 all ok, 1 all failed, 2 partial, 130 interrupted -
+    and on an interrupt the identifiers that were never attempted join the list,
+    so a single rerun covers them too.
+    """
+    started = time.monotonic()
+    source_path = Path(args.identifiers)
+    failed_path = Path(args.failed_out)
+    # _fetch_one reads both; neither is a batch-level decision any more.
+    args.urls = None
+    args.manifest_out = None
+    if args.json and args.failed_out == "-":
+        raise TargetError("--json claims stdout; write --failed-out to a file")
+    base = args.out or "acadfetch-out"
+    doc = _report(args)
+    doc.update(identifiers=str(source_path), out=base, failed_out=str(failed_path))
+    items: list[dict] = []
+    doc["items"] = items
+    entries = _read_identifiers(source_path)
+    summary = doc["summary"] = {
+        "total": len(entries),
+        "ok": 0,
+        "failed": 0,
+        "interrupted": 0,
+        "ok_run": False,
+    }
+    doc["elapsed_s"] = 0.0
+
+    if not entries:
+        message = f"{source_path} lists no identifiers"
+        print(f"acadfetch: {message}", file=sys.stderr)
+        doc["error"] = message
+        _write_failed(failed_path, [])
+        if args.json:
+            _emit(doc)
+        return EXIT_FAIL
+
+    client = _client(args)  # one client: the rate limit holds across the batch
+    if not args.json:
+        print(f"{len(entries)} identifier(s) -> {base}")
+    failures: list[str] = []
+    for index, (line_no, target) in enumerate(entries, 1):
+        args.target = target
+        label = _hide_text(target, args)
+        if not args.json:
+            print(f"==> [{index}/{len(entries)}] {label}")
+        item = {
+            "line": line_no,
+            "target": label,
+            "code": EXIT_OK,
+            "out": None,
+            "error": None,
+            "report": None,
+        }
+        items.append(item)
+        code = EXIT_OK
+        try:
+            code, report_doc = _fetch_one(args, client, emit=False)
+        except KeyboardInterrupt:
+            code, report_doc = EXIT_INTERRUPT, None
+            item["error"] = "interrupted"
+        except (AcFError, OSError) as exc:
+            debug.log_exception(exc)
+            code, report_doc = EXIT_FAIL, None
+            item["error"] = _hide_text(str(exc), args)
+            print(f"acadfetch: {item['error']}", file=sys.stderr)
+        else:
+            assert report_doc is not None
+            item["out"] = report_doc["out"]
+            item["error"] = report_doc["error"] or None
+            item["report"] = report_doc
+        item["code"] = code
+        item["ok"] = code == EXIT_OK
+        if code != EXIT_OK:
+            failures.append(target)
+        if code == EXIT_INTERRUPT:
+            print("\ninterrupted - partial files kept, rerun to resume", file=sys.stderr)
+            # The lines never reached belong on the retry list, not in an
+            # unaccounted gap between "done" and "not asked for".
+            for rest_line, rest_target in entries[index:]:
+                failures.append(rest_target)
+                items.append(
+                    {
+                        "line": rest_line,
+                        "target": _hide_text(rest_target, args),
+                        "code": EXIT_INTERRUPT,
+                        "ok": False,
+                        "out": None,
+                        "error": "not attempted",
+                        "report": None,
+                    }
+                )
+            summary["interrupted"] = len(items) - index + 1
+            break
+
+    summary["failed"] = len(failures)
+    summary["ok"] = len(items) - len(failures)
+    code = EXIT_OK
+    if summary["failed"] == summary["total"]:
+        code = EXIT_FAIL
+    elif summary["failed"]:
+        code = EXIT_PARTIAL
+    if summary["interrupted"]:
+        code = EXIT_INTERRUPT
+    try:
+        _write_failed(failed_path, failures)
+    except OSError as exc:
+        # The downloads stand; only the retry list is missing.
+        print(f"acadfetch: could not write {failed_path}: {exc}", file=sys.stderr)
+        doc["error"] = f"could not write {failed_path}: {exc}"
+        if code == EXIT_OK:
+            code = EXIT_PARTIAL
+    summary["ok_run"] = code == EXIT_OK
+    doc["elapsed_s"] = round(time.monotonic() - started, 3)
+    if not args.json:
+        print()
+        print(
+            f"{summary['ok']}/{summary['total']} identifier(s) ok, "
+            f"{summary['failed']} failed -> {failed_path}"
+        )
+        for row in items:
+            if row["code"] != EXIT_OK:
+                print(f"  line {row['line']}: {row['target']} ({row['error'] or 'failed'})")
+    if args.json:
+        _emit(doc)
+    return code
+
+
 class Parser(argparse.ArgumentParser):
     """Usage errors are not "partial": exit 64 keeps 2 meaning a partial run."""
 
@@ -735,6 +928,79 @@ def build_parser() -> argparse.ArgumentParser:
             help="ignore $ZENODO_TOKEN",
         )
 
+    def transfer_flags(p: argparse.ArgumentParser, *, batch: bool = False) -> None:
+        """Flags that mean the same thing to ``fetch`` and to ``batch``."""
+        if batch:
+            p.add_argument(
+                "-o",
+                "--out",
+                help="base directory; every identifier still gets a directory of its "
+                "own (default: acadfetch-out)",
+            )
+        else:
+            p.add_argument(
+                "-o", "--out", help="output directory (default: acadfetch-out/<source>-<id>)"
+            )
+        p.add_argument(
+            "-j",
+            "--concurrency",
+            type=_positive,
+            default=consts.DEFAULT_CONCURRENCY,
+            help="parallel transfers, per record (default: %(default)s)",
+        )
+        p.add_argument("--max-size", type=parse_size, help="abort above this total, e.g. 500MB")
+        p.add_argument(
+            "--checksum",
+            type=_checksum,
+            metavar="ALGO:HEX",
+            help="verify against this checksum instead (md5:<hex> or sha256:<hex>), "
+            "for sources that publish none; required when migrating a figshare target",
+        )
+        p.add_argument(
+            "--only",
+            nargs="+",
+            metavar="NAME",
+            help="fetch only these file names",
+        )
+        p.add_argument(
+            "--glob",
+            nargs="+",
+            dest="globs",
+            metavar="PATTERN",
+            help="fetch only files whose name matches a shell pattern, e.g. '*.pdf'",
+        )
+        if not batch:
+            p.add_argument(
+                "-w",
+                "--urls",
+                metavar="PATH",
+                help="write an aria2-compatible URL list instead of downloading; '-' is stdout",
+            )
+            p.add_argument("--manifest-out", help="also write the manifest here")
+        p.add_argument("-n", "--dry-run", action="store_true", help="list what would be fetched")
+        p.add_argument("-q", "--quiet", action="store_true", help="no progress line")
+        p.add_argument(
+            "--force",
+            action="store_true",
+            help="fetch again even when a matching file is already there",
+        )
+        p.add_argument(
+            "--no-fsync",
+            action="store_true",
+            help="skip the flush before each rename (faster, weaker against a power cut)",
+        )
+        p.add_argument(
+            "--json",
+            action="store_true",
+            help="print one JSON report to stdout, progress to stderr",
+        )
+        p.add_argument(
+            "--record-full-url",
+            action="store_true",
+            help="keep credential query parameters (X-Amz-Signature, token, …) in "
+            "the manifest and on stdout instead of stripping them",
+        )
+
     fetch = sub.add_parser(
         "fetch",
         help="download every file of a record",
@@ -746,69 +1012,31 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="?",
         help="DOI, zenodo:<id>, arxiv:<id>, or URL",
     )
-    fetch.add_argument(
-        "-o", "--out", help="output directory (default: acadfetch-out/<source>-<id>)"
-    )
-    fetch.add_argument(
-        "-j",
-        "--concurrency",
-        type=_positive,
-        default=consts.DEFAULT_CONCURRENCY,
-        help="parallel transfers (default: %(default)s)",
-    )
-    fetch.add_argument("--max-size", type=parse_size, help="abort above this total, e.g. 500MB")
-    fetch.add_argument(
-        "--checksum",
-        type=_checksum,
-        metavar="ALGO:HEX",
-        help="verify against this checksum instead (md5:<hex> or sha256:<hex>), "
-        "for sources that publish none; required when migrating a figshare target",
-    )
-    fetch.add_argument(
-        "--only",
-        nargs="+",
-        metavar="NAME",
-        help="fetch only these file names",
-    )
-    fetch.add_argument(
-        "--glob",
-        nargs="+",
-        dest="globs",
-        metavar="PATTERN",
-        help="fetch only files whose name matches a shell pattern, e.g. '*.pdf'",
-    )
-    fetch.add_argument(
-        "-w",
-        "--urls",
-        metavar="PATH",
-        help="write an aria2-compatible URL list instead of downloading; '-' is stdout",
-    )
-    fetch.add_argument("--manifest-out", help="also write the manifest here")
-    fetch.add_argument("-n", "--dry-run", action="store_true", help="list what would be fetched")
-    fetch.add_argument("-q", "--quiet", action="store_true", help="no progress line")
-    fetch.add_argument(
-        "--force",
-        action="store_true",
-        help="fetch again even when a matching file is already there",
-    )
-    fetch.add_argument(
-        "--no-fsync",
-        action="store_true",
-        help="skip the flush before each rename (faster, weaker against a power cut)",
-    )
-    fetch.add_argument(
-        "--json",
-        action="store_true",
-        help="print one JSON report to stdout, progress to stderr",
-    )
-    fetch.add_argument(
-        "--record-full-url",
-        action="store_true",
-        help="keep credential query parameters (X-Amz-Signature, token, …) in "
-        "the manifest and on stdout instead of stripping them",
-    )
+    transfer_flags(fetch)
     network_flags(fetch)
     fetch.set_defaults(func=cmd_fetch)
+
+    bat = sub.add_parser(
+        "batch",
+        help="download every identifier in a file, listing the failures",
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    bat.add_argument(
+        "identifiers",
+        metavar="FILE",
+        help="one identifier per line; blank lines and '#' comments are skipped",
+    )
+    transfer_flags(bat, batch=True)
+    bat.add_argument(
+        "--failed-out",
+        default="failed.txt",
+        metavar="PATH",
+        help="write the identifiers that failed here, one per line, for a rerun; "
+        "'-' is stdout (default: failed.txt)",
+    )
+    network_flags(bat)
+    bat.set_defaults(func=cmd_batch)
 
     man = sub.add_parser("manifest", help="write a manifest without downloading")
     man.add_argument("target")

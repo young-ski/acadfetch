@@ -25,6 +25,21 @@ data/manifest.json:
 
 A failed transfer keeps its `.part`; rerunning the same rule resumes.
 
+## A list of targets
+
+When the targets themselves are a file, `batch` keeps going and hands back the
+ones that failed, so a job retries only those:
+
+```bash
+acadfetch batch identifiers.txt --failed-out failed.txt -o data
+test ! -s failed.txt || acadfetch batch failed.txt -o data
+```
+
+The exit code is `1` only when *every* identifier failed, so one dead id does
+not fail the whole job; `2` means some did, and `failed.txt` is the list. Records
+run one after another — `-j` applies inside a record — which is deliberate for
+donation-funded hosts.
+
 ## GitHub Actions
 
 ```yaml

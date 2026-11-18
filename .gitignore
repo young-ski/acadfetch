@@ -10,6 +10,8 @@ pytest-of-*/
 .ruff_cache/
 out/
 acadfetch-out/
+# default batch retry list
+failed.txt
 *.part
 *.part.meta.json
 .tmp/
