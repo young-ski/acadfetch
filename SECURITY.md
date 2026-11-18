@@ -22,7 +22,7 @@ below).
 
 | Version | Supported |
 | --- | --- |
-| 0.8.x | yes |
+| 0.9.x | yes |
 | earlier | no — `pip install -U acadfetch` first |
 
 Only the current minor receives security fixes. A report against an older

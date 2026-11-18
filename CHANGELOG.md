@@ -7,6 +7,19 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-18
+
+### Added
+
+- `fetch --only-file FILE`: pick files out of a large record by name, one exact
+  name per line, instead of typing them on the command line. `--list-files`
+  prints the record's names and transfers nothing, so the selection can be built
+  from the record itself. `--failed-out FILE` writes the selected names that
+  could not be fetched, verbatim and in selection order, as the `--only-file` for
+  the retry. Blank lines and `#` comments are skipped, `-` is stdin, names are
+  case-insensitive, `--only` is a union, and `--glob` narrows further. A selected
+  name that matches nothing is a failure (`2`), not a shorter download.
+
 ## [0.8.0] - 2026-11-18
 
 ### Added
