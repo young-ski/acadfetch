@@ -7,6 +7,17 @@ pre-1.0: a minor bump may break a flag.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-19
+
+### Added
+
+- The progress line now carries a total even when the source published no size
+  (arXiv, a direct URL behind a CDN): the response's `Content-Length`, plus
+  whatever a resume already has on disk, fills in the denominator from the
+  moment the headers arrive, and a finished transfer settles it exactly. A `+`
+  after the total marks it as a lower bound while any file in flight still has
+  no size, so a mixed run cannot read "1.5 KiB/1000 B".
+
 ## [0.9.0] - 2026-11-18
 
 ### Added
