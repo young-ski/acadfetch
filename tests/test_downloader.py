@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import signal
 import threading
@@ -8,6 +9,7 @@ from pathlib import Path
 
 from acadfetch import downloader
 from acadfetch.client import Client
+from acadfetch.progress import Progress
 from acadfetch.sources.base import File, Record
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -204,6 +206,9 @@ class Recorder:
     def advance(self, n):
         self.calls.append(("advance", n))
 
+    def expect(self, name, size):
+        self.calls.append(("expect", name, size))
+
 
 def test_progress_hooks_bracket_the_transfer(server, tmp_path):
     payload = b"p" * 200_000
@@ -217,6 +222,9 @@ def test_progress_hooks_bracket_the_transfer(server, tmp_path):
     assert kinds[0] == "start" and kinds[-1] == "stop"
     assert sum(c[1] for c in rec.calls if c[0] == "advance") == len(payload)
     assert rec.calls[0][2] == len(payload)
+    # The total is learned from the response so the bar has a denominator even
+    # when the source publishes no size.
+    assert ("expect", "a.bin", len(payload)) in rec.calls
 
 
 def test_progress_stops_even_when_transfer_fails(server, tmp_path):
@@ -390,7 +398,7 @@ def _record_with(tmp_path, count=2):
 
 
 def test_interrupt_is_reported_and_the_part_survives(tmp_path, monkeypatch):
-    def interrupting(client, file, part, meta_path, opts):
+    def interrupting(client, file, part, meta_path, opts, name=None):
         part.write_bytes(b"half")
         raise KeyboardInterrupt
 
@@ -405,7 +413,7 @@ def test_interrupt_is_reported_and_the_part_survives(tmp_path, monkeypatch):
 def test_a_stop_skips_remaining_retries(tmp_path, monkeypatch):
     calls = []
 
-    def failing(client, file, part, meta_path, opts):
+    def failing(client, file, part, meta_path, opts, name=None):
         calls.append(1)
         downloader._STOP.set()  # what the interrupt handler does
         raise OSError("socket went away")
@@ -420,7 +428,7 @@ def test_a_stop_skips_remaining_retries(tmp_path, monkeypatch):
 def test_concurrent_interrupt_keeps_completed_results(tmp_path, monkeypatch):
     done = []
 
-    def ok(client, file, part, meta_path, opts):
+    def ok(client, file, part, meta_path, opts, name=None):
         done.append(file.name)
         part.write_bytes(b"x" * (file.size or 0))
 
@@ -692,6 +700,54 @@ def test_a_416_with_a_matching_checksum_accepts_the_part(server, tmp_path):
     assert res.state == "downloaded", res.error
     assert res.verified is True
     assert server.cfg["hits"]["/a.bin"] == 1, "no refetch when the checksum proves it"
+
+
+def test_an_unpublished_size_still_gets_a_total_from_the_response(server, tmp_path):
+    """A source that publishes no size (arXiv) must still show a denominator."""
+    payload = b"x" * 4096
+    server.cfg["files"]["/a.bin"] = payload
+    prog = Progress(stream=io.StringIO(), enabled=True, is_tty=False)
+    f = File(url=server.base + "/a.bin", name="a.bin")  # size deliberately absent
+
+    res = downloader.fetch_file(
+        Client(rate=1000, retries=0), f, opts(tmp_path, retries=0, progress=prog), set()
+    )
+
+    assert res.state == "downloaded"
+    assert prog._total == len(payload), "the response's length should become the total"
+
+
+def test_a_resumed_transfer_reports_the_whole_size_not_the_remainder(server, tmp_path):
+    """Content-Length on a 206 is what is left; the total is that plus the part."""
+    payload = b"y" * 5000
+    server.cfg["files"]["/a.bin"] = payload
+    (tmp_path / "a.bin.part").write_bytes(payload[:1000])
+    prog = Progress(stream=io.StringIO(), enabled=True, is_tty=False)
+    f = File(url=server.base + "/a.bin", name="a.bin")
+
+    res = downloader.fetch_file(
+        Client(rate=1000, retries=0), f, opts(tmp_path, retries=0, progress=prog), set()
+    )
+
+    assert res.state == "downloaded"
+    assert prog._total == len(payload)
+
+
+def test_a_finished_unsized_file_settles_its_own_total(server, tmp_path, monkeypatch):
+    """A server that sends no Content-Length must not leave the ratio open-ended."""
+    payload = b"q" * 3000
+    server.cfg["files"]["/a.bin"] = payload
+    prog = Progress(stream=io.StringIO(), enabled=True, is_tty=False)
+    f = File(url=server.base + "/a.bin", name="a.bin")
+    monkeypatch.setattr(downloader, "_content_length", lambda headers, url: None)
+
+    res = downloader.fetch_file(
+        Client(rate=1000, retries=0), f, opts(tmp_path, retries=0, progress=prog), set()
+    )
+
+    assert res.state == "downloaded"
+    assert prog._total == len(payload), "the finished size settles the denominator"
+    assert prog._unknown == 0
 
 
 def test_a_mismatched_part_that_cannot_be_deleted_says_so(server, tmp_path, monkeypatch):

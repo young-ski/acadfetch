@@ -180,6 +180,10 @@ block page is retried; see [docs/troubleshooting.md](docs/troubleshooting.md).
 
 Progress is one aggregate line for the whole run
 (`3 file(s)  12.4/44.1 MiB  1.8 MiB/s  ETA 0:17`), redrawn in place on a TTY.
+The total comes from the size the source published, or — when it published none,
+as arXiv does — from the response's `Content-Length`, so the bar has a denominator
+either way. A `+` after the total means it is a lower bound, because at least one
+file in flight has no size yet.
 When stdout is a pipe it becomes a new line at most every 5 s (one extra when a
 file starts or stops), so a CI log stays greppable without becoming a wall.
 `-q/--quiet` turns it off.

@@ -78,7 +78,10 @@ class Progress:
         else:
             # A pipe has no viewport to wrap in; 120 is the readability cap.
             self.width = MAX_WIDTH
-        self._active: dict[str, int] = {}
+        self._active: dict[str, int | None] = {}
+        #: Active files whose size the source did not publish. While any exist the
+        #: running total is a lower bound, so it is shown with a "+".
+        self._unknown = 0
         self._done = 0
         self._total = 0
         self._rate = 0.0
@@ -95,9 +98,30 @@ class Progress:
         if not self.enabled:
             return
         with self._lock:
-            self._active[name] = size or 0
-            self._total += size or 0
+            self._active[name] = size
+            if size:
+                self._total += size
+            else:
+                self._unknown += 1
             self._sample()
+        self._maybe_emit(force=True)
+
+    def expect(self, name: str, size: int) -> None:
+        """Learn a total from the transport, for a file the source did not size.
+
+        arXiv publishes no size, but it does answer with a Content-Length, so the
+        denominator can be real from the moment the response headers arrive
+        instead of a bare byte count forever. A size the source did publish wins.
+        """
+        if not self.enabled or size <= 0:
+            return
+        with self._lock:
+            if name not in self._active or self._active[name] is not None:
+                return
+            self._active[name] = size
+            self._unknown -= 1
+            self._total += size
+            self._dirty = True
         self._maybe_emit(force=True)
 
     def stop(self, name: str) -> None:
@@ -105,7 +129,8 @@ class Progress:
             return
         self._maybe_emit(force=True)  # one last frame that still counts the file
         with self._lock:
-            self._active.pop(name, None)
+            if name in self._active and self._active.pop(name) is None:
+                self._unknown -= 1
 
     def advance(self, count: int) -> None:
         if not self.enabled or count <= 0:
@@ -154,7 +179,11 @@ class Progress:
         if len(active) == 1:
             parts[0] = _clip(active[0], NAME_WIDTH)
         if self._total:
-            parts[1] = f"{human(self._done)}/{human(self._total)}"
+            # "+" when at least one active file has no published size and the
+            # denominator is therefore a lower bound -- without it a multi-file
+            # run can read "150 B/100 B" once the unsized file gets going.
+            suffix = "+" if self._unknown else ""
+            parts[1] = f"{human(self._done)}/{human(self._total)}{suffix}"
         if speed > 0:
             parts.append(f"{human(speed)}/s")
             eta = self._eta(speed)

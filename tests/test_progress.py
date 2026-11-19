@@ -110,6 +110,55 @@ def test_no_speed_without_elapsed_time():
     assert "/s" not in prog._render()
 
 
+def test_a_total_from_the_response_fills_in_an_unknown_size():
+    """arXiv publishes no size, but its response does know one."""
+    prog, _, _ = make()
+    prog.start("a", None)
+    assert "/" not in prog._render(), "no denominator to show yet"
+
+    prog.expect("a", 2048)
+
+    line = prog._render()
+    assert "/2.0 KiB" in line
+    assert "+" not in line, "the total is now exact"
+
+
+def test_a_published_size_is_not_overridden_by_the_response():
+    prog, _, _ = make()
+    prog.start("a", 1000)
+
+    prog.expect("a", 5000)
+
+    assert "/1000 B" in prog._render()
+
+
+def test_a_partial_total_is_marked_as_a_lower_bound():
+    """Mixing sized and unsized files must not read "1.5 KiB/1000 B" as a ratio."""
+    prog, _, _ = make()
+    prog.start("a", 1000)
+    prog.start("b", None)
+    prog.advance(1500)
+
+    assert "/1000 B+" in prog._render()
+
+
+def test_stopping_the_unsized_file_clears_the_lower_bound():
+    prog, _, _ = make()
+    prog.start("a", 1000)
+    prog.start("b", None)
+
+    prog.stop("b")
+
+    assert "+" not in prog._render()
+
+
+def test_expect_ignores_a_file_that_was_never_started():
+    prog, _, _ = make()
+    prog.expect("ghost", 10)
+
+    assert prog._total == 0
+
+
 def test_line_is_width_capped():
     prog, _, _ = make()
     for i in range(40):

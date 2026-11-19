@@ -35,10 +35,10 @@ def test_an_unexpected_worker_error_is_one_failed_row(server, monkeypatch, capsy
 
     original = downloader._attempt
 
-    def sometimes(client, file, part, meta_path, final, opts, resumed_from):
+    def sometimes(client, file, part, meta_path, final, opts, resumed_from, name=None):
         if file.name == "1.bin":
             raise PermissionError("disk said no")
-        return original(client, file, part, meta_path, final, opts, resumed_from)
+        return original(client, file, part, meta_path, final, opts, resumed_from, name)
 
     monkeypatch.setattr(downloader, "_attempt", sometimes)
 

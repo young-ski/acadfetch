@@ -301,7 +301,14 @@ def _restart_or_finish(
     raise HttpError(416, file.url, f"{raised}, {compared}; restarting", transient=True)
 
 
-def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Options) -> Transfer:
+def _transfer(
+    client: Client,
+    file: File,
+    part: Path,
+    meta_path: Path,
+    opts: Options,
+    name: str | None = None,
+) -> Transfer:
     """Move bytes into ``part``, resuming if possible. Returns what happened."""
     meta = _read_meta(meta_path) if part.exists() else {}
     if meta.get("url") not in (None, file.url):
@@ -359,6 +366,12 @@ def _transfer(client: Client, file: File, part: Path, meta_path: Path, opts: Opt
             mode, offset = "wb", 0
         else:
             mode, offset = "ab", have
+
+        if declared is not None and opts.progress:
+            # The progress bar was started with the *published* size, which a
+            # source like arXiv does not have. This response does, and it knows
+            # how much of it is still to come.
+            opts.progress.expect(name or file.name, declared + offset)
 
         # A 200 to a Range request means the server ignored it, so this attempt
         # restarts from zero. The bytes already on disk are still the best copy
@@ -672,8 +685,13 @@ def fetch_file(client: Client, file: File, opts: Options, taken: set[str]) -> Re
     if progress:
         progress.start(name, file.size)
     try:
-        res = _attempt(client, file, part, meta_path, final, opts, resumed_from)
+        res = _attempt(client, file, part, meta_path, final, opts, resumed_from, name)
         res.name = name
+        if progress and res.state == "downloaded":
+            # A finished transfer is exactly this many bytes. Without this, a file
+            # the source never sized keeps the total a lower bound even after it
+            # completed, and its own bytes push the ratio past 100%.
+            progress.expect(name, res.bytes)
         return res
     except KeyboardInterrupt:
         # Raise inside a read on the main thread: the bytes already paid for are
@@ -703,6 +721,7 @@ def _attempt(
     final: Path,
     opts: Options,
     resumed_from: int,
+    name: str | None = None,
 ) -> Result:
     """Retry loop, verification and final rename for one file.
 
@@ -714,7 +733,7 @@ def _attempt(
     blocked = 0
     for attempt in range(opts.retries + 1):
         try:
-            info = _transfer(client, file, part, meta_path, opts)
+            info = _transfer(client, file, part, meta_path, opts, name)
             break
         except HttpError as exc:
             last = exc
@@ -806,7 +825,7 @@ def _attempt(
                 retrieved_at=_now(),
             )
         try:
-            info = _transfer(client, file, part, meta_path, opts)
+            info = _transfer(client, file, part, meta_path, opts, name)
             verdict = _verdict(file, info.digests if info else None)
         except Exception as exc:  # noqa: BLE001
             return Result(
